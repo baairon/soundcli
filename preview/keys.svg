@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="832" height="496" viewBox="0 0 832 496" role="img">
+  <rect width="100%" height="100%" rx="14" fill="#0c0c0d"/>
+  <rect x="0.5" y="0.5" width="831" height="495" rx="14" fill="none" stroke="#28282b" stroke-width="1"/>
+  <text x="416" y="29" text-anchor="middle" font-family='ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace' font-size="13" fill="#8a8a8a">soundcli</text>
+  <g font-family='ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace' font-size="16" fill="#d8d0c6">
+    <text x="41.6" y="84" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ae664f">╭─────────────────────────────────────────────────────────────────────────╮</text>
+    <rect x="45.7" y="90" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="756.1" y="90" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="112" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="128" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d" font-weight="600">Keyboard</text>
+    <rect x="756.1" y="112" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="134" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="756.1" y="134" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="156" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="172" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="600">Navigate</text>
+    <text x="300.8" y="172" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="600">Player</text>
+    <text x="502.4" y="172" textLength="86.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="600">Downloads</text>
+    <rect x="756.1" y="156" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="178" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="194" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">↑ ↓</text>
+    <text x="166.4" y="194" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Move</text>
+    <text x="300.8" y="194" textLength="48" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">space</text>
+    <text x="368" y="194" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Play / pause</text>
+    <text x="502.4" y="194" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">[ ]</text>
+    <text x="569.6" y="194" textLength="172.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Pause / resume all</text>
+    <rect x="756.1" y="178" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="200" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="216" textLength="86.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">PgUp PgDn</text>
+    <text x="166.4" y="216" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Jump a page</text>
+    <text x="300.8" y="216" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">← →</text>
+    <text x="368" y="216" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Seek 15s</text>
+    <text x="502.4" y="216" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">c</text>
+    <text x="569.6" y="216" textLength="96" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Cancel all</text>
+    <rect x="756.1" y="200" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="222" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="238" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">↵</text>
+    <text x="166.4" y="238" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Open / play</text>
+    <text x="300.8" y="238" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">, .</text>
+    <text x="368" y="238" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Seek 5s</text>
+    <text x="502.4" y="238" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">↵</text>
+    <text x="569.6" y="238" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Dismiss done</text>
+    <rect x="756.1" y="222" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="244" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="260" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">1-5</text>
+    <text x="166.4" y="260" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Jump section</text>
+    <text x="300.8" y="260" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">0</text>
+    <text x="368" y="260" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Restart song</text>
+    <text x="502.4" y="260" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">f</text>
+    <text x="569.6" y="260" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Retry failed</text>
+    <rect x="756.1" y="244" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="266" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="282" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">/</text>
+    <text x="166.4" y="282" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Search</text>
+    <text x="300.8" y="282" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">n p</text>
+    <text x="368" y="282" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Next / prev</text>
+    <text x="502.4" y="282" textLength="48" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">space</text>
+    <text x="569.6" y="282" textLength="153.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Pick: toggle row</text>
+    <rect x="756.1" y="266" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="288" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="304" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">d</text>
+    <text x="166.4" y="304" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Delete</text>
+    <text x="300.8" y="304" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">r</text>
+    <text x="368" y="304" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Repeat</text>
+    <rect x="756.1" y="288" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="310" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="326" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">tab</text>
+    <text x="166.4" y="326" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Switch pane</text>
+    <text x="300.8" y="326" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">s</text>
+    <text x="368" y="326" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Shuffle</text>
+    <rect x="756.1" y="310" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="332" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="348" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">esc</text>
+    <text x="166.4" y="348" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Back</text>
+    <text x="300.8" y="348" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">+ -</text>
+    <text x="368" y="348" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Volume</text>
+    <rect x="756.1" y="332" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="354" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="370" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">q</text>
+    <text x="166.4" y="370" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Quit</text>
+    <rect x="756.1" y="354" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="376" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="756.1" y="376" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="398" width="1.4" height="22" fill="#ae664f"/>
+    <text x="60.8" y="414" textLength="220.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Press ? or esc to close</text>
+    <rect x="756.1" y="398" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="45.7" y="420" width="1.4" height="22" fill="#ae664f"/>
+    <rect x="756.1" y="420" width="1.4" height="22" fill="#ae664f"/>
+    <text x="41.6" y="458" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ae664f">╰─────────────────────────────────────────────────────────────────────────╯</text>
+  </g>
+</svg>
