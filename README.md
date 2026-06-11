@@ -47,13 +47,13 @@ Press `?` in the app to see this anytime. The footer only ever shows the few key
 <details>
 <summary><b>How it works</b> (the technical bits)</summary>
 
-`soundcli` keeps its npm install tiny and fetches its tools on first need, straight from their official releases:
+`soundcli` keeps its install tiny by fetching the tools it needs directly from their official releases:
 
-- The download engine (yt-dlp) arrives on first run and is kept current automatically: updates stage in the background and apply when the queue is idle, because platforms change their APIs and a current engine is what keeps downloads working.
-- The audio converter (ffmpeg and ffprobe) downloads once on first run and re-downloads itself if the binary ever goes bad.
-- The player (mpv) installs automatically on Windows (winget) and macOS (brew). On Linux the app shows the one-line install command for your package manager; until then songs open in your system's default player.
+- **yt-dlp** (download engine): Downloads on first run and updates automatically in the background to handle API changes.
+- **ffmpeg** (audio converter): Downloads on first run and self-repairs if the binary ever breaks.
+- **mpv** (player): Installs automatically on Windows (winget) and macOS (brew). On Linux, it provides a one-line install command.
 
-Tool binaries land in your OS's standard cache folder, and your music lives in your real Music folder (`~/Music/soundcli` by default; on Windows the actual Music location is honored, including one that OneDrive has moved).
+Tool binaries land in your system's standard cache folder, and your music is saved to your default Music folder (`~/Music/soundcli`).
 
 Requires Node 22 or newer.
 
