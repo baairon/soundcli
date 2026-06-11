@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="832" height="540" viewBox="0 0 832 540" role="img">
+  <rect width="100%" height="100%" rx="14" fill="#0c0c0d"/>
+  <rect x="0.5" y="0.5" width="831" height="539" rx="14" fill="none" stroke="#28282b" stroke-width="1"/>
+  <text x="416" y="29" text-anchor="middle" font-family='ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace' font-size="13" fill="#8a8a8a">soundcli</text>
+  <g font-family='ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace' font-size="16" fill="#d8d0c6">
+    <text x="41.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffb163" font-weight="600">█</text>
+    <text x="51.2" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffaf62" font-weight="600">▀</text>
+    <text x="60.8" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffac60" font-weight="600">▀</text>
+    <text x="80" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa75e" font-weight="600">█</text>
+    <text x="89.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa55c" font-weight="600">▀</text>
+    <text x="99.2" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa25b" font-weight="600">█</text>
+    <text x="118.4" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9d59" font-weight="600">█</text>
+    <text x="137.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9956" font-weight="600">█</text>
+    <text x="156.8" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9453" font-weight="600">█</text>
+    <text x="166.4" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9152" font-weight="600">▄</text>
+    <text x="185.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff8c4f" font-weight="600">█</text>
+    <text x="204.8" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff874d" font-weight="600">█</text>
+    <text x="214.4" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff854b" font-weight="600">▀</text>
+    <text x="224" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff824a" font-weight="600">▄</text>
+    <text x="243.2" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7e47" font-weight="600">█</text>
+    <text x="252.8" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7b46" font-weight="600">▀</text>
+    <text x="262.4" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7945" font-weight="600">▀</text>
+    <text x="281.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7442" font-weight="600">█</text>
+    <text x="320" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d" font-weight="600">█</text>
+    <text x="41.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0501f" font-weight="600">▄</text>
+    <text x="51.2" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#de4f1e" font-weight="600">▄</text>
+    <text x="60.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#db4e1d" font-weight="600">█</text>
+    <text x="80" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#d74c1c" font-weight="600">█</text>
+    <text x="89.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#d54c1b" font-weight="600">▄</text>
+    <text x="99.2" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#d24b1a" font-weight="600">█</text>
+    <text x="118.4" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ce4919" font-weight="600">█</text>
+    <text x="128" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#cc4818" font-weight="600">▄</text>
+    <text x="137.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#c94717" font-weight="600">█</text>
+    <text x="156.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#c54515" font-weight="600">█</text>
+    <text x="176" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#c04314" font-weight="600">▀</text>
+    <text x="185.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#be4313" font-weight="600">█</text>
+    <text x="204.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#b94112" font-weight="600">█</text>
+    <text x="214.4" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#b74011" font-weight="600">▄</text>
+    <text x="224" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#b53f10" font-weight="600">▀</text>
+    <text x="243.2" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#b03d0e" font-weight="600">█</text>
+    <text x="252.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ae3c0e" font-weight="600">▄</text>
+    <text x="262.4" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ac3b0d" font-weight="600">▄</text>
+    <text x="281.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a73a0b" font-weight="600">█</text>
+    <text x="291.2" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a5390a" font-weight="600">▄</text>
+    <text x="300.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3380a" font-weight="600">▄</text>
+    <text x="320" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#9e3608" font-weight="600">█</text>
+    <text x="41.6" y="128" textLength="748.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#6b635d">──────────────────────────────────────────────────────────────────────────────</text>
+    <text x="41.6" y="172" textLength="144" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ece4da" font-weight="600">Own your music.</text>
+    <text x="41.6" y="194" textLength="739.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Your YouTube, SoundCloud, and Spotify libraries, saved to local files, played</text>
+    <text x="41.6" y="216" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">offline.</text>
+    <text x="41.6" y="260" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Saves to</text>
+    <text x="128" y="260" textLength="153.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffb163">~/Music/soundcli</text>
+    <text x="41.6" y="304" textLength="182.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ece4da" font-weight="600">Where's your music?</text>
+    <text x="41.6" y="348" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d">❯</text>
+    <text x="60.8" y="348" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d" font-weight="600">YouTube</text>
+    <text x="185.6" y="348" textLength="201.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Your public playlists</text>
+    <text x="60.8" y="370" textLength="288" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">SoundCloud   Your likes &amp; sets</text>
+    <text x="60.8" y="392" textLength="268.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Spotify      A playlist link</text>
+    <text x="41.6" y="436" textLength="316.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">↑↓ Move  ·  ↵ Choose  ·  esc Skip</text>
+    <text x="41.6" y="480" textLength="748.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#6b635d">──────────────────────────────────────────────────────────────────────────────</text>
+    <text x="41.6" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#f0c560">⏸</text>
+    <text x="60.8" y="502" textLength="96" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ece4da" font-weight="600">Song Title</text>
+    <text x="166.4" y="502" textLength="124.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">· Artist Name</text>
+    <text x="416" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d">█</text>
+    <text x="425.6" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6f40">█</text>
+    <text x="435.2" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7543">█</text>
+    <text x="444.8" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7a46">█</text>
+    <text x="454.4" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff8049">█</text>
+    <text x="464" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff854c">█</text>
+    <text x="473.6" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff8b4f">█</text>
+    <text x="483.2" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9051">█</text>
+    <text x="492.8" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9654">█</text>
+    <text x="502.4" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9b57">█</text>
+    <text x="512" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa15a">█</text>
+    <text x="521.6" y="502" textLength="268.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">░░░  1:13 / 1:37  · 80%  ⇄ ↻</text>
+  </g>
+</svg>

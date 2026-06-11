@@ -1,0 +1,284 @@
+import { useEffect, useMemo, useState } from "react";
+import { Box, Text, useInput } from "ink";
+import { Select } from "@inkjs/ui";
+import { useStore, useQueueItems, useLibrary, usePlayback } from "../store";
+import { Header } from "../components/Header";
+import { TextField } from "../components/TextField";
+import { SongList, type SongGroup } from "../components/SongList";
+import { COLOR, ICON } from "../theme";
+import { cleanText, formatDuration } from "../../util/format";
+import { deleteTracks } from "../../library/delete";
+import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
+
+const SOURCE_ORDER: SourceId[] = ["youtube", "soundcloud", "spotify", "link"];
+
+/** The library can be narrowed to one source ("all" shows every source). */
+type Filter = "all" | SourceId;
+
+/** Fisher-Yates shuffle (returns a new array). */
+function shuffle<T>(arr: T[]): T[] {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
+
+/**
+ * Every downloaded song in one place: a flat newest-first list with source
+ * tabs and text search. Browsing by set lives in the Playlists section.
+ */
+export function Library() {
+  const {
+    library,
+    config,
+    playTrack,
+    region,
+    setSection,
+    setCaptureMode,
+    queue,
+    playback,
+    pendingSearch,
+    setPendingSearch,
+  } = useStore();
+  useQueueItems(queue);
+  const libVersion = useLibrary(library);
+  const playingId = usePlayback(playback).track?.id;
+  const focused = region === "content";
+
+  // Text search + a source tab filter.
+  const [q, setQ] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [filter, setFilter] = useState<Filter>("all");
+  const searching = q.trim().length > 0;
+  // Pending one-song delete, shown as a y/esc confirm in the search row.
+  const [confirm, setConfirm] = useState<{ id: string; title: string } | null>(
+    null,
+  );
+
+  const songs = useMemo(
+    // library.all() is already newest-first (addedAt desc); recompute on new
+    // downloads and on drift cleanup (prune/merge).
+    () => library.all(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [library, queue.doneCount, libVersion],
+  );
+
+  // Sources that actually have songs, in canonical order, for the filter tabs.
+  const presentSources = useMemo(() => {
+    const set = new Set(songs.map((t) => t.source));
+    return SOURCE_ORDER.filter((s) => set.has(s));
+  }, [songs]);
+  const tabs = useMemo<Filter[]>(() => ["all", ...presentSources], [presentSources]);
+
+  // Per-source totals shown beside each tab, so the bar reads as a real
+  // segmented control. Counts reflect the whole library, not the search.
+  const countBySource = useMemo(() => {
+    const m = new Map<SourceId, number>();
+    for (const t of songs) m.set(t.source, (m.get(t.source) ?? 0) + 1);
+    return m;
+  }, [songs]);
+  const tabCount = (tb: Filter): number =>
+    tb === "all" ? songs.length : countBySource.get(tb) ?? 0;
+
+  // If the active source disappears (e.g. its last song is removed), fall back.
+  useEffect(() => {
+    if (filter !== "all" && !presentSources.includes(filter)) setFilter("all");
+  }, [filter, presentSources]);
+
+  // Tracks narrowed to the active source tab.
+  const inSource =
+    filter === "all" ? songs : songs.filter((t) => t.source === filter);
+
+  const visible = searching
+    ? library.search(q).filter((t) => filter === "all" || t.source === filter)
+    : inSource;
+
+  // Take over the keyboard only while typing in the search box; a pending
+  // delete confirm owns esc so the global one doesn't bounce to the sidebar.
+  useEffect(() => {
+    setCaptureMode(
+      focused && editing ? "text" : focused && confirm ? "esc" : "none",
+    );
+    return () => setCaptureMode("none");
+  }, [focused, editing, confirm, setCaptureMode]);
+
+  // Consume the global "/" intent: arrive with the search box already open.
+  useEffect(() => {
+    if (pendingSearch && focused) {
+      setPendingSearch(false);
+      setEditing(true);
+    }
+  }, [pendingSearch, focused, setPendingSearch]);
+
+  // Browsing keys:
+  //   "/" opens search
+  //   "[" / "]" step the source tabs
+  useInput(
+    (input) => {
+      if (input === "/") {
+        setEditing(true);
+        return;
+      }
+      if (input === "[" || input === "]") {
+        const dir = input === "]" ? 1 : -1;
+        const i = tabs.indexOf(filter);
+        setFilter(tabs[(i + dir + tabs.length) % tabs.length]!);
+      }
+    },
+    { isActive: focused && !editing && !confirm },
+  );
+
+  // esc closes the search box (back to browsing), without leaving the section.
+  useInput(
+    (_input, key) => {
+      if (key.escape) setEditing(false);
+    },
+    { isActive: focused && editing },
+  );
+
+  // y commits the pending delete, esc keeps the song. Playback stops first
+  // when it's the one playing: the player holds the file handle open and
+  // Windows refuses to unlink it.
+  useInput(
+    (input, key) => {
+      if (key.escape) setConfirm(null);
+      else if (input === "y" && confirm) {
+        const t = library.get(confirm.id);
+        setConfirm(null);
+        if (!t) return;
+        void (async () => {
+          if (playingId === t.id) await playback.stop();
+          await deleteTracks(library, [t], config.libraryDir);
+        })();
+      }
+    },
+    { isActive: focused && confirm !== null },
+  );
+
+  if (songs.length === 0) {
+    return (
+      <Box flexDirection="column">
+        <Header title="Library" focused={focused} />
+        <Text dimColor>Nothing here yet.</Text>
+        <Box marginTop={1}>
+          <Select
+            isDisabled={!focused}
+            options={[{ label: "Download ›", value: "download" }]}
+            onChange={() => setSection("download")}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
+  const toItem = (t: Track) => ({
+    value: t.id,
+    title: t.title,
+    artist: t.artist,
+    meta: formatDuration(t.durationSec),
+  });
+
+  let groups: SongGroup[];
+  if (searching) {
+    groups = [{ items: visible.slice(0, 200).map(toItem) }];
+  } else if (filter === "all" && presentSources.length > 1) {
+    groups = presentSources
+      .map((src) => {
+        const tracks = inSource.filter((t) => t.source === src);
+        return {
+          title: `${SOURCE_LABELS[src]}  ${ICON.dot}  ${tracks.length}`,
+          items: tracks.slice(0, 80).map(toItem),
+        };
+      })
+      .filter((g) => g.items.length > 0);
+  } else {
+    groups = [{ items: visible.slice(0, 200).map(toItem) }];
+  }
+
+  const subtitle = `${visible.length.toLocaleString()} song${visible.length === 1 ? "" : "s"}`;
+
+  // Shuffle action for the browse view only; search results play in order.
+  const shuffleLabel = `${ICON.shuffle} Shuffle ${
+    filter === "all" ? "all" : SOURCE_LABELS[filter]
+  } (${visible.length})`;
+
+  const action =
+    !searching && visible.length > 1
+      ? { value: "__shuffle__", label: shuffleLabel }
+      : undefined;
+
+  // Rows rendered above the list beyond the standard header (which listRows
+  // already accounts for): tabs (1) + the search line and its margin (2).
+  const reserveRows = 3;
+
+  return (
+    <Box flexDirection="column">
+      <Header title="Library" subtitle={subtitle} focused={focused} />
+      {/* Source tabs: a segmented bar, each with its count; active is accented. */}
+      <Box>
+        {tabs.map((tb, i) => {
+          const here = tb === filter;
+          return (
+            <Box key={tb}>
+              {i > 0 ? <Text>{"   "}</Text> : null}
+              <Text color={here ? COLOR.accent : undefined} dimColor={!here} bold={here}>
+                {tb === "all" ? "All" : SOURCE_LABELS[tb]}
+              </Text>
+              <Text dimColor>{` ${tabCount(tb)}`}</Text>
+            </Box>
+          );
+        })}
+      </Box>
+      {/* The search row doubles as the delete confirm: same single row, so
+          the list's height budget never moves. */}
+      <Box marginBottom={1}>
+        {confirm ? (
+          <Text color={COLOR.warn} wrap="truncate-end">
+            {`Delete '${cleanText(confirm.title)}'?  y Delete  ${ICON.dot}  esc Keep`}
+          </Text>
+        ) : (
+          <>
+            <Text dimColor>{`${ICON.pointer} `}</Text>
+            {focused && editing ? (
+              <TextField
+                defaultValue={q}
+                placeholder="Filter by name…"
+                onChange={setQ}
+                onSubmit={() => setEditing(false)}
+              />
+            ) : (
+              <Text dimColor>{q || "Press / to search"}</Text>
+            )}
+          </>
+        )}
+      </Box>
+      {searching && visible.length === 0 ? (
+        <Text dimColor>No matches.</Text>
+      ) : (
+        <SongList
+          groups={groups}
+          action={action}
+          playingId={playingId}
+          focused={focused && !editing && !confirm}
+          reserveRows={reserveRows}
+          deleteTargetsPlaying
+          onDelete={(value) => {
+            const t = library.get(value);
+            if (t) setConfirm({ id: t.id, title: t.title });
+          }}
+          onSelect={(value) => {
+            if (value === "__shuffle__") {
+              const shuffled = shuffle(visible);
+              if (shuffled.length > 0) playTrack(shuffled[0]!, shuffled);
+              return;
+            }
+            const t = library.get(value);
+            if (t) playTrack(t, visible);
+          }}
+        />
+      )}
+    </Box>
+  );
+}
