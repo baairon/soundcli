@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/baairon/soundcli/main/preview/welcome.svg" width="780" alt="A terminal dashboard for downloading and playing your music">
+  <img src="preview/welcome.svg" width="780" alt="A terminal dashboard for downloading and playing your music">
 </p>
 
 Own your music. soundcli saves your YouTube, SoundCloud, and Spotify libraries as real audio files on your computer, then plays them offline. No account, no subscription, no cloud. The files are yours.
@@ -25,7 +25,7 @@ That's it. Everything else sets itself up automatically.
 soundcli shows where your songs will be saved (a tidy folder inside your Music folder), then asks where your music comes from. Pick YouTube, SoundCloud, or Spotify, type your name on that platform or paste a link to any playlist, album, or song, and your library starts downloading right away. You can listen while it works.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/baairon/soundcli/main/preview/library.svg" width="780" alt="The library view: sidebar, your songs, and the player mid-song">
+  <img src="preview/library.svg" width="780" alt="The library view: sidebar, your songs, and the player mid-song">
 </p>
 
 ## What you get
@@ -41,7 +41,7 @@ Playback works fully offline with all the usual controls: pause, seek, next and 
 Press `?` in the app to see this anytime. The footer only ever shows the few keys that matter right now, so there's nothing to memorize.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/baairon/soundcli/main/preview/keys.svg" width="780" alt="The keyboard cheatsheet: navigate, player, and download keys">
+  <img src="preview/keys.svg" width="780" alt="The keyboard cheatsheet: navigate, player, and download keys">
 </p>
 
 <details>
