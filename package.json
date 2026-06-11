@@ -1,0 +1,67 @@
+{
+  "name": "soundcli",
+  "version": "0.1.0",
+  "description": "Own your music. A lightweight cross-OS CLI that downloads your YouTube, SoundCloud, and Spotify libraries to local files and plays them offline from a clean terminal dashboard.",
+  "type": "module",
+  "bin": {
+    "soundcli": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx src/index.tsx",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "previews": "tsx scripts/render-previews.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "music",
+    "cli",
+    "tui",
+    "ink",
+    "yt-dlp",
+    "youtube",
+    "soundcloud",
+    "spotify",
+    "downloader",
+    "offline",
+    "player",
+    "self-sovereignty"
+  ],
+  "author": "bairon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baairon/soundcli.git"
+  },
+  "homepage": "https://github.com/baairon/soundcli#readme",
+  "bugs": {
+    "url": "https://github.com/baairon/soundcli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@inkjs/ui": "^2.0.0",
+    "env-paths": "^4.0.0",
+    "execa": "^9.6.1",
+    "ink": "^7.0.5",
+    "react": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "@types/react": "^19.2.17",
+    "ink-testing-library": "^4.0.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}
