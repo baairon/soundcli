@@ -2,7 +2,7 @@
   <img src="preview/welcome.svg" width="780" alt="A terminal dashboard for downloading and playing your music">
 </p>
 
-Own your music. `soundcli` saves your YouTube, SoundCloud, and Spotify libraries as real audio files on your computer, then plays them offline. No account, no subscription, no cloud. The files are yours.
+Own your music. soundcli saves your YouTube, SoundCloud, and Spotify libraries as real audio files on your computer, then plays them offline. No account, no subscription, no cloud. The files are yours.
 
 ## Get started
 
@@ -15,14 +15,14 @@ You only need to do the first two steps once.
 3. **Start the app.** Paste this line into the window and press Enter:
 
 ```sh
-npx soundcli
+npx sndcli
 ```
 
 That's it. Everything else sets itself up automatically.
 
 ## Your first run
 
-`soundcli` shows where your songs will be saved (a tidy folder inside your Music folder), then asks where your music comes from. Pick YouTube, SoundCloud, or Spotify, type your name on that platform or paste a link to any playlist, album, or song, and your library starts downloading right away. You can listen while it works.
+soundcli shows where your songs will be saved (a tidy folder inside your Music folder), then asks where your music comes from. Pick YouTube, SoundCloud, or Spotify, type your name on that platform or paste a link to any playlist, album, or song, and your library starts downloading right away. You can listen while it works.
 
 <p align="center">
   <img src="preview/library.svg" width="780" alt="The library view: sidebar, your songs, and the player mid-song">
@@ -47,7 +47,7 @@ Press `?` in the app to see this anytime. The footer only ever shows the few key
 <details>
 <summary><b>How it works</b> (the technical bits)</summary>
 
-`soundcli` keeps its install tiny by fetching the tools it needs directly from their official releases:
+soundcli keeps its install tiny by fetching the tools it needs directly from their official releases:
 
 - **yt-dlp** (download engine): Downloads on first run and updates automatically in the background to handle API changes.
 - **ffmpeg** (audio converter): Downloads on first run and self-repairs if the binary ever breaks.
@@ -61,7 +61,7 @@ Requires Node 22 or newer.
 
 ## Privacy
 
-`soundcli` is built to be a fully local experience. There are no accounts, no logins, and no tracking.
+soundcli is built to be a fully local experience. There are no accounts, no logins, and no tracking.
 
 The application only connects to the internet to:
 - Download your requested music.
