@@ -8,6 +8,7 @@ vi.mock("../src/util/net", () => ({
 }));
 
 import { spotifySearchQuery, makeSpotify } from "../src/sources/spotify/adapter";
+import { clearSpotifyTokenCache } from "../src/sources/spotify/token";
 import {
   parseSpotifyInput,
   readPublicPlaylist,
@@ -59,6 +60,7 @@ function okResponse(html: string): Response {
 beforeEach(() => {
   fetchResilientMock.mockReset();
   clearSpotifyCache();
+  clearSpotifyTokenCache();
 });
 
 describe("parseSpotifyInput", () => {
@@ -166,6 +168,71 @@ describe("readPublicEntity (tokenless embed reader)", () => {
       text: async () => "",
     } as unknown as Response);
     await expect(readPublicEntity("playlist", "GONE")).rejects.toThrow(/404/);
+  });
+});
+
+describe("makeSpotify adapter (user handle)", () => {
+  it("lists public playlists owned by a profile handle", async () => {
+    fetchResilientMock.mockImplementation(async (url: string) => {
+      if (url.includes("secretDict.json")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ "61": [62, 54, 109, 83, 107] }),
+        } as unknown as Response;
+      }
+      if (url === "https://open.spotify.com/") {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (k: string) => (k.toLowerCase() === "date" ? new Date().toUTCString() : null) },
+        } as unknown as Response;
+      }
+      if (url.includes("/api/token")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            accessToken: "tok",
+            clientId: "cid",
+            accessTokenExpirationTimestampMs: Date.now() + 60_000,
+          }),
+        } as unknown as Response;
+      }
+      if (url.includes("user-profile-view")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            name: "Artist",
+            public_playlists: [
+              {
+                uri: "spotify:playlist:PL1",
+                name: "My Mix",
+                owner_uri: "spotify:user:artist",
+              },
+              {
+                uri: "spotify:playlist:PL2",
+                name: "Someone else's",
+                owner_uri: "spotify:user:other",
+              },
+            ],
+          }),
+        } as unknown as Response;
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const adapter = makeSpotify("artist");
+    const lists = await adapter.listPlaylists();
+    expect(lists).toEqual([
+      {
+        id: "PL1",
+        title: "My Mix",
+        url: "spotify:playlist:PL1",
+        kind: "playlist",
+      },
+    ]);
   });
 });
 

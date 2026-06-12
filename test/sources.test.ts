@@ -7,7 +7,7 @@ vi.mock("../src/ytdlp/ytdlp", () => ({
   enumerate: (...a: unknown[]) => enumerateMock(...a),
 }));
 
-import { youtubeVideoUrl } from "../src/sources/youtube";
+import { makeYoutube, youtubeVideoUrl } from "../src/sources/youtube";
 import { normalizeHandle } from "../src/sources/handle";
 import {
   isSoundcloudTombstone,
@@ -21,7 +21,7 @@ describe("youtubeVideoUrl", () => {
       "https://www.youtube.com/watch?v=abc",
     );
   });
-  it("builds a watch URL from a bare id", () => {
+  it("builds a video URL from a bare id", () => {
     expect(youtubeVideoUrl("dQw4w9WgXcQ")).toBe(
       "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     );
@@ -139,5 +139,44 @@ describe("soundcloud tombstone filtering", () => {
       "https://soundcloud.com/user/likes",
     );
     expect(tracks.map((t) => t.id)).toEqual(["1", "2"]);
+  });
+});
+
+describe("pasted collection keeps its real fetched name", () => {
+  beforeEach(() => {
+    enumerateMock.mockReset();
+  });
+
+  it("youtube single link stores col.title, not the guessed label", async () => {
+    enumerateMock.mockResolvedValue({
+      title: "Real Playlist Name",
+      entries: [
+        { id: "v1", title: "Song A", url: "https://youtu.be/v1", duration: 100 },
+      ],
+    });
+    const yt = makeYoutube("https://www.youtube.com/playlist?list=PLabc");
+    const lists = await yt.listPlaylists();
+    expect(lists[0]!.id).toBe("single");
+    const tracks = await yt.listTracks(lists[0]!);
+    expect(tracks[0]!.playlistTitle).toBe("Real Playlist Name");
+  });
+
+  it("soundcloud single set link stores col.title", async () => {
+    enumerateMock.mockResolvedValue({
+      title: "Placeholder Mix",
+      entries: [
+        {
+          id: "s1",
+          title: "Track A",
+          url: "https://soundcloud.com/dj/track-a",
+          duration: 100,
+        },
+      ],
+    });
+    const sc = makeSoundcloud("https://soundcloud.com/dj/sets/summer");
+    const lists = await sc.listPlaylists();
+    expect(lists[0]!.id).toBe("single");
+    const tracks = await sc.listTracks(lists[0]!);
+    expect(tracks[0]!.playlistTitle).toBe("Placeholder Mix");
   });
 });

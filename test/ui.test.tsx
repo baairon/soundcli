@@ -11,6 +11,8 @@ import { Playback } from "../src/player/playback";
 import { PlayHistory } from "../src/player/history";
 import { Library as LibrarySection } from "../src/ui/sections/Library";
 import { Download, PlaylistPicker } from "../src/ui/sections/Download";
+import { Playlists } from "../src/ui/sections/Playlists";
+import { History as HistorySection } from "../src/ui/sections/History";
 import { Settings } from "../src/ui/sections/Settings";
 import { Sidebar } from "../src/ui/components/Sidebar";
 import { SongList } from "../src/ui/components/SongList";
@@ -36,6 +38,8 @@ function makeStore(overrides?: Partial<Store>): Store {
     setRegion: () => {},
     captureMode: "none",
     setCaptureMode: () => {},
+    playlistsDepth: "sets",
+    setPlaylistsDepth: () => {},
     pendingSearch: false,
     setPendingSearch: () => {},
     pendingAdd: null,
@@ -83,6 +87,19 @@ describe("single-page sections render", () => {
     const { lastFrame } = render(wrap(<Settings />, store));
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Music folder");
+  });
+
+  it("settings shows values inline after the label column", () => {
+    const store = makeStore({
+      region: "content",
+      config: { ...defaultConfig, spotifyHandle: "spotify" },
+    });
+    const { lastFrame } = render(wrap(<Settings />, store));
+    const row = (lastFrame() ?? "")
+      .split("\n")
+      .find((l) => l.includes("Spotify handle"));
+    expect(row).toBeDefined();
+    expect(row).toMatch(/Spotify handle\s+@spotify/);
   });
 
   it("sidebar lists the familiar music-app sections", () => {
@@ -271,6 +288,60 @@ describe("single-page sections render", () => {
     const lines = (lastFrame() ?? "").split("\n").filter((l) => l.trim() !== "");
     expect(lines.length).toBeLessThanOrEqual(3);
   });
+
+  it("SongList keeps the active section header visible on short terminals", async () => {
+    const groups = [
+      {
+        title: "SoundCloud · 2",
+        items: [
+          { value: "sc1", title: "SC One" },
+          { value: "sc2", title: "SC Two" },
+        ],
+      },
+      {
+        title: "Spotify · 3",
+        items: [
+          { value: "sp1", title: "Playlist - Solstice Arc" },
+          { value: "sp2", title: "Playlist - Marrow Fields" },
+          { value: "sp3", title: "My Mix - Vantablue" },
+        ],
+      },
+    ];
+    const { stdin, lastFrame } = render(
+      wrap(
+        <SongList groups={groups} focused reserveRows={0} onSelect={() => {}} />,
+        makeStore({ listRows: 3 }),
+      ),
+    );
+    await tick();
+    for (let i = 0; i < 3; i++) {
+      stdin.write(DOWN);
+      await tick();
+    }
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Spotify");
+    expect(frame).toContain("Marrow Fields");
+  });
+
+  it("numbers item rows when `numbered` is set", () => {
+    const groups = [
+      {
+        items: [
+          { value: "a", title: "First Track" },
+          { value: "b", title: "Second Track" },
+        ],
+      },
+    ];
+    const { lastFrame } = render(
+      wrap(
+        <SongList groups={groups} numbered focused onSelect={() => {}} />,
+        makeStore({ listRows: 10 }),
+      ),
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toMatch(/1\s+First Track/);
+    expect(frame).toMatch(/2\s+Second Track/);
+  });
 });
 
 describe("queue copy, banner, overlay, welcome paste", () => {
@@ -332,6 +403,147 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     ).toBe(true);
     expect(lines.some((l) => l.includes("Pause / resume all"))).toBe(true);
     expect(lines.some((l) => l.includes("Pick: toggle row"))).toBe(true);
+  });
+
+  it("playlists / opens local filter instead of jumping to library", async () => {
+    const sections: string[] = [];
+    const store = makeStore({
+      region: "content",
+      section: "playlists",
+      library: makeFakeLibrary(),
+      setSection: (s) => sections.push(s),
+    });
+    const { stdin, lastFrame } = render(wrap(<Playlists />, store));
+    await tick();
+    stdin.write("/");
+    await tick();
+    expect(sections).not.toContain("library");
+    expect(lastFrame() ?? "").toContain("Search playlists");
+  });
+
+  it("playlists shows source filter tabs like library", () => {
+    const { lastFrame } = render(
+      wrap(
+        <Playlists />,
+        makeStore({ region: "content", library: makeFakeLibrary() }),
+      ),
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("All");
+    expect(frame).toContain("YouTube");
+    expect(frame).toContain("SoundCloud");
+    const lines = frame.split("\n");
+    const allLine = lines.findIndex((l) => l.includes("All") && l.includes("YouTube"));
+    const filterLine = lines.findIndex((l) => l.includes("Press / to search"));
+    expect(allLine).toBeGreaterThanOrEqual(0);
+    expect(filterLine).toBeGreaterThan(allLine);
+  });
+
+  it("playlists drill-down does not violate hook order", async () => {
+    const store = makeStore({
+      region: "content",
+      library: makeFakeLibrary(),
+    });
+    const { stdin, lastFrame } = render(wrap(<Playlists />, store));
+    expect(lastFrame() ?? "").toContain("playlist one");
+    stdin.write("\r");
+    await tick();
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Song Title");
+    expect(frame).not.toContain("Press / to search");
+    expect(frame).toContain("Shuffle");
+  });
+
+  it("playlists drill-down shows runtime and numbered tracks", async () => {
+    const store = makeStore({
+      region: "content",
+      library: makeFakeLibrary(),
+    });
+    const { stdin, lastFrame } = render(wrap(<Playlists />, store));
+    await tick();
+    stdin.write("\r");
+    await tick();
+    const frame = lastFrame() ?? "";
+    // Coarse runtime sits in the subtitle…
+    expect(frame).toMatch(/\d+\s*min/);
+    // …and the first track is numbered.
+    expect(frame).toMatch(/1\s+Song Title/);
+  });
+
+  it("playlists sets view leaves captureMode none so esc reaches the sidebar", async () => {
+    const modes: string[] = [];
+    const store = makeStore({
+      region: "content",
+      library: makeFakeLibrary(),
+      setCaptureMode: (m) => modes.push(m),
+    });
+    render(wrap(<Playlists />, store));
+    await tick();
+    // Browsing sets must not claim "picker": that swallows the global esc and
+    // strands focus in the content pane (regression).
+    expect(modes).not.toContain("picker");
+    expect(modes.at(-1)).toBe("none");
+  });
+
+  it("history shows source tabs and a search prompt", () => {
+    const history = {
+      ids: () => ["youtube:yourhandle:t1", "soundcloud:yourhandle:t6"],
+      onChange: () => () => {},
+      getVersion: () => 0,
+    } as unknown as PlayHistory;
+    const { lastFrame } = render(
+      wrap(
+        <HistorySection />,
+        makeStore({ region: "content", library: makeFakeLibrary(), history }),
+      ),
+    );
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("All");
+    expect(frame).toContain("YouTube");
+    expect(frame).toContain("SoundCloud");
+    expect(frame).toContain("Press / to search");
+    expect(frame).toContain("Song Title");
+  });
+
+  it("history / opens local search instead of jumping to library", async () => {
+    const sections: string[] = [];
+    const history = {
+      ids: () => ["youtube:yourhandle:t1"],
+      onChange: () => () => {},
+      getVersion: () => 0,
+    } as unknown as PlayHistory;
+    const store = makeStore({
+      region: "content",
+      section: "history",
+      library: makeFakeLibrary(),
+      history,
+      setSection: (s) => sections.push(s),
+    });
+    const { stdin, lastFrame } = render(wrap(<HistorySection />, store));
+    await tick();
+    stdin.write("/");
+    await tick();
+    expect(sections).not.toContain("library");
+    expect(lastFrame() ?? "").not.toContain("Press / to search");
+  });
+
+  it("download consumes a pasted playlist link", async () => {
+    let cleared = false;
+    const store = makeStore({
+      region: "content",
+      section: "download",
+      pendingAdd: "https://www.youtube.com/playlist?list=PLtest123",
+      setPendingAdd: (v) => {
+        if (v === null) cleared = true;
+      },
+    });
+    const { lastFrame } = render(wrap(<Download />, store));
+    for (let i = 0; i < 8; i++) {
+      await tick();
+      if ((lastFrame() ?? "").includes("Ready to download")) break;
+    }
+    expect(cleared).toBe(true);
+    expect(lastFrame() ?? "").toContain("Ready to download");
   });
 
   it("welcome pastes straight into the download flow", async () => {

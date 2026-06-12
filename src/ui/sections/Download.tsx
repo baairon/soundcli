@@ -6,19 +6,24 @@ import { wrapStep } from "../move";
 import { TextField } from "../components/TextField";
 import { Header } from "../components/Header";
 import { GradientBar } from "../components/GradientBar";
+import { detectInput, detectPasteLink, isLinkInput } from "../../sources/detect";
+import { tracksFromUrl } from "../../sources/enqueue-url";
+import { persistableHandle } from "../../sources/persist-handle";
 import { makeYoutube } from "../../sources/youtube";
 import { makeSoundcloud } from "../../sources/soundcloud";
 import { makeSpotify } from "../../sources/spotify/adapter";
 import { COLOR, ICON } from "../theme";
 import {
   cleanText,
+  displayUrl,
   formatBytesPerSec,
   formatEtaShort,
+  linkCollectionTitle,
   trackDisplayTitle,
 } from "../../util/format";
 import { WAITING_FOR_TOOLS, type QueueItem } from "../../download/queue";
 import type { SourceAdapter, SourcePlaylist } from "../../sources/types";
-import type { SourceId } from "../../library/types";
+import { SOURCE_LABELS, type SourceId } from "../../library/types";
 
 type Step =
   /** The landing view: pick a source to browse. */
@@ -42,8 +47,8 @@ const SOURCES: {
   desc: string;
 }[] = [
   { id: "youtube", name: "YouTube", desc: "Your public playlists" },
-  { id: "soundcloud", name: "SoundCloud", desc: "Your likes & sets" },
-  { id: "spotify", name: "Spotify", desc: "A playlist link" },
+  { id: "soundcloud", name: "SoundCloud", desc: "Your likes & playlists" },
+  { id: "spotify", name: "Spotify", desc: "Your public playlists" },
 ];
 
 const PROMPTS: Record<
@@ -51,19 +56,19 @@ const PROMPTS: Record<
   { title: string; hint: string; placeholder: string }
 > = {
   youtube: {
-    title: "Your YouTube handle",
-    hint: "Just the handle, no @ or link",
-    placeholder: "NASA",
+    title: "YouTube channel or playlist",
+    hint: "Enter an @handle, or paste a full link",
+    placeholder: "e.g. @username or https://youtube.com/...",
   },
   soundcloud: {
-    title: "Your SoundCloud handle",
-    hint: "Just the handle, no link",
-    placeholder: "lumen",
+    title: "SoundCloud profile or playlist",
+    hint: "Enter a username, or paste a full link",
+    placeholder: "e.g. username or https://soundcloud.com/...",
   },
   spotify: {
-    title: "Your Spotify playlist link",
-    hint: "Open a playlist in Spotify and copy its link",
-    placeholder: "https://open.spotify.com/playlist/...",
+    title: "Spotify profile or playlist",
+    hint: "Enter a username, or paste a full link",
+    placeholder: "e.g. username or https://open.spotify.com/...",
   },
 };
 
@@ -82,9 +87,11 @@ function PageIntro({
       <Text bold color={focused ? COLOR.accent : COLOR.text}>
         {title}
       </Text>
-      <Text dimColor wrap="truncate-end">
-        {hint}
-      </Text>
+      {hint ? (
+        <Text dimColor wrap="truncate-end">
+          {hint}
+        </Text>
+      ) : null}
     </Box>
   );
 }
@@ -451,6 +458,65 @@ function QueueView() {
  * Shows track counts and "N saved" badges using library data so users can
  * see at a glance which sets are already fully downloaded.
  */
+function isDirectLink(item: SourcePlaylist): boolean {
+  return item.id === "single";
+}
+
+function playlistRowLabel(item: SourcePlaylist): string {
+  if (item.title && item.title !== "URL") return cleanText(item.title);
+  return linkCollectionTitle(item.url);
+}
+
+/** One link or playlist: skip the multi-picker chrome (filter, "download all"). */
+function SingleListConfirm({
+  item,
+  focused,
+  onSubmit,
+}: {
+  item: SourcePlaylist;
+  focused: boolean;
+  onSubmit: (ids: string[]) => void;
+}) {
+  // A pasted link has no real name until it's fetched, so show the clean link
+  // itself rather than a guessed "YouTube playlist" abstraction.
+  const label = isDirectLink(item)
+    ? displayUrl(item.url)
+    : playlistRowLabel(item);
+  const detail =
+    item.count !== undefined
+      ? `${item.count} ${item.count === 1 ? "song" : "songs"}`
+      : "";
+
+  useInput(
+    (_input, key) => {
+      if (key.return) onSubmit([item.id]);
+    },
+    { isActive: focused },
+  );
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={COLOR.accent}>{focused ? `${ICON.pointer} ` : "  "}</Text>
+        <Box flexGrow={1} minWidth={0}>
+          <Text
+            wrap="truncate-end"
+            color={focused ? COLOR.accent : undefined}
+            bold={focused}
+          >
+            {label}
+          </Text>
+        </Box>
+        {detail ? (
+          <Box flexShrink={0} marginLeft={2}>
+            <Text dimColor>{detail}</Text>
+          </Box>
+        ) : null}
+      </Box>
+    </Box>
+  );
+}
+
 // Exported for tests: the height invariant (never taller than the rows the
 // body has left) is what keeps Ink's redraw from corrupting on squashed
 // terminals, so it's pinned by test/ui.test.tsx.
@@ -499,19 +565,10 @@ export function PlaylistPicker({
   const searching = q.trim().length > 0;
   const qLower = q.toLowerCase();
 
-  let hiddenSavedCount = 0;
   const ordered: SourcePlaylist[] = [];
   for (const item of lists) {
     if (searching && !item.title.toLowerCase().includes(qLower)) continue;
 
-    const owned = ownedByPlaylist.get(item.title) ?? 0;
-    const total = item.count;
-    const allSaved = total !== undefined && total > 0 && owned >= total;
-
-    if (!searching && allSaved) {
-      hiddenSavedCount++;
-      continue;
-    }
     ordered.push(item);
   }
 
@@ -524,15 +581,9 @@ export function PlaylistPicker({
 
   // Display rows: the action row, every list, then the hidden-saved summary.
   // Item idx is its cursor position (1-based, since the action row owns 0).
-  type Row =
-    | { kind: "action" }
-    | { kind: "item"; item: SourcePlaylist; idx: number }
-    | { kind: "hidden-summary"; count: number };
+  type Row = { kind: "action" } | { kind: "item"; item: SourcePlaylist; idx: number };
   const rows: Row[] = [{ kind: "action" }];
   ordered.forEach((item, i) => rows.push({ kind: "item", item, idx: i + 1 }));
-  if (hiddenSavedCount > 0) {
-    rows.push({ kind: "hidden-summary", count: hiddenSavedCount });
-  }
 
   useInput(
     (input, key) => {
@@ -602,7 +653,7 @@ export function PlaylistPicker({
 
   // The action row's detail: total songs when every list reports a count.
   const totalSongs = ordered.reduce((acc, l) => acc + (l.count ?? 0), 0);
-  const setsLabel = `${ordered.length} ${ordered.length === 1 ? "set" : "sets"}`;
+  const setsLabel = `${ordered.length} ${ordered.length === 1 ? "playlist" : "playlists"}`;
   const everythingDetail =
     totalSongs > 0 && ordered.every((l) => l.count !== undefined)
       ? `${totalSongs.toLocaleString()} songs  ${ICON.dot}  ${setsLabel}`
@@ -627,28 +678,19 @@ export function PlaylistPicker({
         {focused && filtering ? (
           <TextField
             defaultValue={q}
-            placeholder="Filter sets…"
+            placeholder="Search playlists…"
             onChange={setQ}
             onSubmit={() => setFiltering(false)}
           />
         ) : (
           <Box flexGrow={1} minWidth={0}>
             <Text dimColor wrap="truncate-end">
-              {q || "Press / to filter"}
+              {q || "Press / to search"}
             </Text>
           </Box>
         )}
       </Box>
       {visible.map((r, i) => {
-        if (r.kind === "hidden-summary") {
-          return (
-            <Box key={`hs-${start + i}`}>
-              <Text dimColor wrap="truncate-end">{`    ${r.count} fully-saved ${
-                r.count === 1 ? "set" : "sets"
-              } hidden  ${ICON.dot}  / finds them`}</Text>
-            </Box>
-          );
-        }
         if (r.kind === "action") {
           const hereAction = cursor === 0 && focused;
           return (
@@ -725,8 +767,10 @@ export function PlaylistPicker({
  */
 function DownloadHub({
   onPickSource,
+  onPaste,
 }: {
   onPickSource: (id: SourceId) => void;
+  onPaste: (raw: string) => void;
 }) {
   const { region } = useStore();
   const focused = region === "content";
@@ -735,7 +779,17 @@ function DownloadHub({
   const nameWidth = menuNameWidth();
 
   useInput(
-    (_input, key) => {
+    (input, key) => {
+      if (!key.ctrl && !key.meta) {
+        const text = input
+          .replace(/\x1b?\[<\d+;\d+;\d+[Mm]/g, "")
+          .replace(/[\r\n]+/g, " ")
+          .trim();
+        if (text.length > 1) {
+          onPaste(text);
+          return;
+        }
+      }
       if (key.upArrow) setCursor((c) => wrapStep(c, -1, count));
       else if (key.downArrow) setCursor((c) => wrapStep(c, 1, count));
       else if (key.return) {
@@ -773,6 +827,8 @@ export function Download() {
     region,
     setCaptureMode,
     listRows,
+    pendingAdd,
+    setPendingAdd,
   } = useStore();
   const focused = region === "content";
   // Subscribe to queue updates so the stats snapshot below stays fresh.
@@ -786,6 +842,16 @@ export function Download() {
     hasItems ? { name: "queue" } : { name: "pick-source" },
   );
   const [filtering, setFiltering] = useState(false);
+
+  // Welcome pastes and CLI links land here once; consume and clear immediately.
+  useEffect(() => {
+    if (!pendingAdd) return;
+    const raw = pendingAdd;
+    setPendingAdd(null);
+    void handleIncomingLink(raw);
+    // handleIncomingLink closes over the latest step helpers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAdd, setPendingAdd]);
 
   // Only an emptied-out queue (x clear, wipe-all) leaves nothing to show, so
   // fall back to the source picker then.
@@ -833,14 +899,15 @@ export function Download() {
   function savedValue(source: SourceId): string | undefined {
     if (source === "youtube") return config.youtubeHandle;
     if (source === "soundcloud") return config.soundcloudHandle;
-    return config.spotifyProfile;
+    return config.spotifyHandle;
   }
 
   async function loadLists(adapter: SourceAdapter, handle: string): Promise<void> {
+    setFiltering(false);
     const message =
       adapter.id === "spotify"
         ? "Reading your Spotify playlist…"
-        : `Looking through @${handle}'s ${adapter.label}…`;
+        : `Loading ${handle.startsWith("http") ? "link" : `@${handle}`}…`;
     setStep({ name: "loading", message, source: adapter.id });
     try {
       const lists = await adapter.listPlaylists();
@@ -856,6 +923,76 @@ export function Download() {
     }
   }
 
+  async function enqueuePaste(source: SourceId, url: string): Promise<void> {
+    setFiltering(false);
+    setStep({ name: "loading", message: "Reading link…", source });
+    try {
+      const tracks = await tracksFromUrl(source, url);
+      if (tracks.length === 0) {
+        setStep({
+          name: "error",
+          message: "Couldn't read that link.",
+          source,
+        });
+        return;
+      }
+      const r = queue.enqueue(
+        tracks.map((t) => ({
+          source,
+          sourceLabel: SOURCE_LABELS[source],
+          track: t,
+        })),
+      );
+      if (r.added > 0) setStep({ name: "queue" });
+      else setStep({ name: "info", message: "Nothing new to download." });
+    } catch (e) {
+      setStep({
+        name: "error",
+        message: e instanceof Error ? e.message : String(e),
+        source,
+      });
+    }
+  }
+
+  async function handleIncomingLink(raw: string): Promise<void> {
+    const s = raw.trim();
+    if (!s) return;
+
+    const d = detectInput(s);
+    if (d?.ok && (d.kind === "collection" || d.kind === "profile")) {
+      const adapter = adapterFor(d.source, s);
+      await loadLists(adapter, s);
+      return;
+    }
+
+    const paste = detectPasteLink(s);
+    if (paste.ok && paste.action === "download") {
+      await enqueuePaste(paste.source, paste.url);
+      return;
+    }
+    if (d?.ok && d.kind === "track") {
+      await enqueuePaste(d.source, d.value);
+      return;
+    }
+    if (d && !d.ok) {
+      setStep({ name: "error", message: d.reason, source: d.source });
+      return;
+    }
+    if (!paste.ok && isLinkInput(s)) {
+      setStep({
+        name: "error",
+        message: paste.reason,
+        source: paste.source,
+      });
+      return;
+    }
+
+    setStep({
+      name: "error",
+      message: "Paste a full link, or pick a source and enter a handle.",
+    });
+  }
+
   function onPickSource(value: string): void {
     const source = value as SourceId;
     const saved = savedValue(source);
@@ -869,10 +1006,22 @@ export function Download() {
   function onHandle(source: SourceId, value: string): void {
     const v = value.trim();
     if (!v) return;
-    if (source === "youtube") setConfig({ ...config, youtubeHandle: v });
-    else if (source === "soundcloud")
-      setConfig({ ...config, soundcloudHandle: v });
-    else setConfig({ ...config, spotifyProfile: v });
+
+    const saved = persistableHandle(source, v);
+    if (saved !== undefined) {
+      if (source === "youtube") setConfig({ ...config, youtubeHandle: saved });
+      else if (source === "soundcloud")
+        setConfig({ ...config, soundcloudHandle: saved });
+      else if (source === "spotify")
+        setConfig({ ...config, spotifyHandle: saved });
+    }
+
+    const paste = detectPasteLink(v);
+    if (paste.ok && paste.action === "download") {
+      void enqueuePaste(paste.source, paste.url);
+      return;
+    }
+
     void loadLists(adapterFor(source, v), v);
   }
 
@@ -956,8 +1105,7 @@ export function Download() {
     const opts: { label: string; value: string }[] = [];
     if (source)
       opts.push({
-        label:
-          source === "spotify" ? "Try a different link" : "Try a different handle",
+        label: "Try a different handle",
         value: "handle",
       });
     opts.push({ label: "Pick another source", value: "source" });
@@ -1020,24 +1168,55 @@ export function Download() {
   }
 
   if (step.name === "pick-lists") {
+    const singleOnly = step.lists.length === 1;
     // The hint legend is the first thing to go on a squashed terminal, so
     // the sets themselves keep their rows (`?` still has every key).
-    const showHints = listRows >= 9;
+    const showHints = listRows >= 9 && !singleOnly;
+    const only = step.lists[0];
+    const introHint = only
+      ? isDirectLink(only)
+        ? ""
+        : only.count !== undefined
+          ? `${only.count} ${only.count === 1 ? "song" : "songs"}`
+          : ""
+      : "";
     return (
       <Box flexDirection="column">
-        <Header title="What should we grab?" focused={focused} />
-        <PlaylistPicker
-          key={`${step.adapter.id}-${step.lists.length}`}
-          lists={step.lists}
-          sourceId={step.adapter.id}
-          owner={step.adapter.owner}
-          onSubmit={(ids) => void onSubmitLists(step.adapter, step.lists, ids)}
-          filtering={filtering}
-          setFiltering={setFiltering}
-          reserveRows={showHints ? 2 : 0}
-        />
-        {showHints ? (
-          <FooterHint>{`↵ Download  ${ICON.dot}  space Pick  ${ICON.dot}  / Filter  ${ICON.dot}  e Change source`}</FooterHint>
+        {singleOnly ? (
+          <PageIntro
+            title="Ready to download"
+            hint={introHint}
+            focused={focused}
+          />
+        ) : (
+          <Header title="What should we grab?" focused={focused} />
+        )}
+        {singleOnly ? (
+          <SingleListConfirm
+            item={step.lists[0]!}
+            focused={focused}
+            onSubmit={(ids) =>
+              void onSubmitLists(step.adapter, step.lists, ids)
+            }
+          />
+        ) : (
+          <PlaylistPicker
+            key={`${step.adapter.id}-${step.lists.length}`}
+            lists={step.lists}
+            sourceId={step.adapter.id}
+            owner={step.adapter.owner}
+            onSubmit={(ids) =>
+              void onSubmitLists(step.adapter, step.lists, ids)
+            }
+            filtering={filtering}
+            setFiltering={setFiltering}
+            reserveRows={showHints ? 2 : 0}
+          />
+        )}
+        {singleOnly ? (
+          <FooterHint>{`↵ Download  ${ICON.dot}  esc Back`}</FooterHint>
+        ) : showHints ? (
+          <FooterHint>{`↵ Download  ${ICON.dot}  space Pick  ${ICON.dot}  / Search  ${ICON.dot}  e Change handle`}</FooterHint>
         ) : null}
       </Box>
     );
@@ -1101,6 +1280,7 @@ export function Download() {
       />
       <DownloadHub
         onPickSource={onPickSource}
+        onPaste={(raw) => void handleIncomingLink(raw)}
       />
       <FooterHint>{`↑↓ Move  ${ICON.dot}  ↵ Choose`}</FooterHint>
     </Box>

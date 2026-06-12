@@ -38,12 +38,49 @@ interface SongListProps {
    *  Library and History where the playing song should be deletable without
    *  moving the cursor to it. */
   deleteTargetsPlaying?: boolean;
+  /** Show 1-based track numbers before each item (the drill-in playlist look). */
+  numbered?: boolean;
+  /** Insert a blank line between the leading action row and the first item. */
+  actionGap?: boolean;
 }
 
 type Row =
   | { kind: "header"; title: string }
+  | { kind: "spacer" }
   | { kind: "action"; value: string; label: string; idx: number }
-  | { kind: "item"; item: SongItem; idx: number };
+  | { kind: "item"; item: SongItem; idx: number; no: number };
+
+/** Section header row directly above `rowIndex`, if any. */
+function headerAbove(rows: Row[], rowIndex: number): number {
+  for (let i = rowIndex; i >= 0; i--) {
+    if (rows[i]?.kind === "header") return i;
+  }
+  return -1;
+}
+
+/**
+ * Scroll offset that keeps the cursor on screen, centred when possible, and
+ * pins the active section header into the window when both still fit (short
+ * terminals otherwise centre past the header and it vanishes).
+ */
+function scrollStart(rows: Row[], cursorRow: number, height: number): number {
+  if (cursorRow < 0 || rows.length === 0) return 0;
+  const maxStart = Math.max(0, rows.length - height);
+  const preferred = Math.min(
+    Math.max(0, cursorRow - Math.floor(height / 2)),
+    maxStart,
+  );
+
+  const headerRow = headerAbove(rows, cursorRow);
+  if (headerRow < 0) return preferred;
+
+  const minStart = Math.max(0, cursorRow - height + 1);
+  const maxStartForHeader = Math.min(headerRow, maxStart);
+  if (minStart <= maxStartForHeader) {
+    return Math.max(minStart, Math.min(preferred, maxStartForHeader));
+  }
+  return Math.max(minStart, Math.min(preferred, maxStart));
+}
 
 /**
  * A scrollable, keyboard-driven single-select song list. We render it ourselves
@@ -60,6 +97,8 @@ export function SongList({
   onSelect,
   onDelete,
   deleteTargetsPlaying,
+  numbered,
+  actionGap,
 }: SongListProps) {
   const { listRows } = useStore();
   const [cursor, setCursor] = useState(0);
@@ -67,21 +106,29 @@ export function SongList({
   // Flatten to display rows, numbering only the selectable ones.
   const rows: Row[] = [];
   let idx = 0;
+  let no = 0;
   if (action) {
     rows.push({ kind: "action", value: action.value, label: action.label, idx });
     idx++;
+    if (actionGap) rows.push({ kind: "spacer" });
   }
   for (const g of groups) {
     if (g.items.length === 0) continue;
     if (g.title) rows.push({ kind: "header", title: g.title });
     for (const item of g.items) {
-      rows.push({ kind: "item", item, idx });
+      no++;
+      rows.push({ kind: "item", item, idx, no });
       idx++;
     }
   }
   const selectableCount = idx;
+  // Width of the widest track number, so the index column stays aligned.
+  const numWidth = String(no).length;
   const values: string[] = rows
-    .filter((r): r is Extract<Row, { idx: number }> => r.kind !== "header")
+    .filter(
+      (r): r is Extract<Row, { idx: number }> =>
+        r.kind === "action" || r.kind === "item",
+    )
     .map((r) => (r.kind === "action" ? r.value : r.item.value));
 
   // Keep the cursor in range if the list shrank between renders.
@@ -121,12 +168,9 @@ export function SongList({
   // the terminal and Ink's incremental redraw mangles rows (merged / dropped).
   const height = Math.max(1, listRows - reserveRows);
   const cursorRow = rows.findIndex(
-    (r) => r.kind !== "header" && r.idx === clamped,
+    (r) => (r.kind === "action" || r.kind === "item") && r.idx === clamped,
   );
-  const start = Math.min(
-    Math.max(0, cursorRow - Math.floor(height / 2)),
-    Math.max(0, rows.length - height),
-  );
+  const start = scrollStart(rows, cursorRow, height);
   const visible = rows.slice(start, start + height);
 
   return (
@@ -136,6 +180,13 @@ export function SongList({
           return (
             <Box key={`h-${start + i}`}>
               <Text color={COLOR.alt}>{r.title}</Text>
+            </Box>
+          );
+        }
+        if (r.kind === "spacer") {
+          return (
+            <Box key={`sp-${start + i}`}>
+              <Text> </Text>
             </Box>
           );
         }
@@ -154,6 +205,11 @@ export function SongList({
           <Box key={value}>
             <Text color={COLOR.accent}>{here ? `${ICON.pointer} ` : "  "}</Text>
             <Text color={COLOR.good}>{playing ? `${ICON.play} ` : "  "}</Text>
+            {numbered && r.kind === "item" ? (
+              <Box flexShrink={0} marginRight={1}>
+                <Text dimColor>{String(r.no).padStart(numWidth)}</Text>
+              </Box>
+            ) : null}
             <Box flexGrow={1} minWidth={0}>
               <Text
                 wrap="truncate-end"
