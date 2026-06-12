@@ -47,6 +47,26 @@ Everything runs from the keyboard, with controls that are quick to pick up. Pres
   <img src="preview/keys.svg" alt="The keyboard cheatsheet: navigate, player, and download keys" style="max-width: 832px; width: 100%; height: auto;">
 </p>
 
+## Local Development
+
+If you want to run or develop soundcli locally:
+
+1. Clone the repository and navigate into the directory.
+2. Install dependencies:
+   ```sh
+   npm install
+   ```
+3. Run the development version:
+   ```sh
+   npm run dev
+   ```
+   Or build the project and run it:
+   ```sh
+   npm run build
+   npx sndcli
+   ```
+
 ## Privacy
 
 soundcli runs on your computer and nowhere else. There are no accounts, no logins, and nothing tracking what you play. It connects to the internet for three reasons only: to download the music you ask for, to set itself up the first time, and to keep its own tools current so downloads keep working. Everything else stays with you.
+
