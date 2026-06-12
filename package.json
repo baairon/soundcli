@@ -1,7 +1,7 @@
 {
   "name": "sndcli",
-  "version": "1.0.1",
-  "description": "Own your music. A lightweight cross-OS CLI that downloads your YouTube, SoundCloud, and Spotify libraries to local files and plays them offline from a clean terminal dashboard.",
+  "version": "1.0.0",
+  "description": "Own your music. Download your YouTube, SoundCloud, and Spotify libraries to your computer and play them offline, all from your terminal.",
   "type": "module",
   "bin": {
     "sndcli": "./dist/index.js"
