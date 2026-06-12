@@ -9,6 +9,7 @@ import { Header } from "../components/Header";
 import { openPath } from "../../util/open-path";
 import { wrapStep } from "../move";
 import { displayPath, truncate } from "../../util/format";
+import { persistableHandle } from "../../sources/persist-handle";
 import { COLOR, ICON } from "../theme";
 
 type Mode =
@@ -19,46 +20,45 @@ type Mode =
   | "wipe-all";
 
 export function Settings() {
-  const { config, setConfig, library, queue, region, setCaptureMode, cols } =
+  const { config, setConfig, library, queue, region, setCaptureMode } =
     useStore();
   const focused = region === "content";
   const [mode, setMode] = useState<Mode>("menu");
   const [cursor, setCursor] = useState(0);
 
-  // The settings list, rendered ourselves for a clean two-tone (name + current
-  // value) layout, with the destructive "Wipe all" set apart at the bottom.
-  // `set` marks a configured value (shown in warm sand) vs an unset placeholder.
   const entries: {
     value: Mode | "open-folder";
     name: string;
     detail: string;
     set?: boolean;
-    action?: boolean;
     danger?: boolean;
   }[] = [
     {
       value: "youtube",
-      name: "YouTube",
-      detail: config.youtubeHandle ?? "not set",
+      name: "YouTube handle",
+      detail: config.youtubeHandle ? `@${config.youtubeHandle}` : "not set",
       set: Boolean(config.youtubeHandle),
     },
     {
       value: "soundcloud",
-      name: "SoundCloud",
-      detail: config.soundcloudHandle ?? "not set",
+      name: "SoundCloud handle",
+      detail: config.soundcloudHandle
+        ? `@${config.soundcloudHandle}`
+        : "not set",
       set: Boolean(config.soundcloudHandle),
     },
     {
       value: "spotify",
-      name: "Spotify",
-      detail: config.spotifyProfile ?? "not set",
-      set: Boolean(config.spotifyProfile),
+      name: "Spotify handle",
+      detail: config.spotifyHandle
+        ? `@${config.spotifyHandle}`
+        : "not set",
+      set: Boolean(config.spotifyHandle),
     },
     {
       value: "open-folder",
       name: "Music folder",
       detail: displayPath(config.libraryDir),
-      action: true,
     },
     {
       value: "wipe-all",
@@ -98,9 +98,7 @@ export function Settings() {
   // can't toggle the player mid-confirmation.
   const inSubPage = focused && mode !== "menu";
   const isTextPage =
-    mode === "youtube" ||
-    mode === "soundcloud" ||
-    mode === "spotify";
+    mode === "youtube" || mode === "soundcloud" || mode === "spotify";
   useEffect(() => {
     setCaptureMode(!inSubPage ? "none" : isTextPage ? "text" : "picker");
     return () => setCaptureMode("none");
@@ -155,27 +153,45 @@ export function Settings() {
     );
   }
 
+  function saveHandleField(
+    source: "youtube" | "soundcloud" | "spotify",
+    key: "youtubeHandle" | "soundcloudHandle" | "spotifyHandle",
+    title: string,
+    value: string | undefined,
+  ) {
+    return handleField(title, value, "@username", (v) => {
+      const raw = v ?? "";
+      const handle = persistableHandle(source, raw);
+      if (handle !== undefined || !raw.trim()) {
+        setConfig({ ...config, [key]: handle });
+      }
+    });
+  }
+
   if (mode === "youtube") {
-    return handleField("Your YouTube handle", config.youtubeHandle, "NASA", (v) =>
-      setConfig({ ...config, youtubeHandle: v }),
+    return saveHandleField(
+      "youtube",
+      "youtubeHandle",
+      "Your YouTube handle",
+      config.youtubeHandle,
     );
   }
 
   if (mode === "soundcloud") {
-    return handleField(
+    return saveHandleField(
+      "soundcloud",
+      "soundcloudHandle",
       "Your SoundCloud handle",
       config.soundcloudHandle,
-      "flume",
-      (v) => setConfig({ ...config, soundcloudHandle: v }),
     );
   }
 
   if (mode === "spotify") {
-    return handleField(
-      "Your Spotify playlist link",
-      config.spotifyProfile,
-      "https://open.spotify.com/playlist/...",
-      (v) => setConfig({ ...config, spotifyProfile: v }),
+    return saveHandleField(
+      "spotify",
+      "spotifyHandle",
+      "Your Spotify handle",
+      config.spotifyHandle,
     );
   }
 
@@ -227,7 +243,10 @@ export function Settings() {
     );
   }
 
+  // Label column + inline detail (same rhythm as Download source rows), not
+  // edge-pinned with flex — that leaves an ugly dead zone in wide terminals.
   const nameWidth = Math.max(...entries.map((e) => e.name.length));
+  const DETAIL_MAX = 48;
 
   return (
     <Box flexDirection="column">
@@ -235,29 +254,28 @@ export function Settings() {
       <Box flexDirection="column">
         {entries.map((it, i) => {
           const here = i === cursor && focused;
+          const active = here && focused;
+          const detailColor =
+            it.danger ? COLOR.bad : it.set ? COLOR.alt : undefined;
           return (
             <Box key={it.value} marginTop={it.danger ? 1 : 0}>
-              <Text color={COLOR.accent}>{here ? `${ICON.pointer} ` : "  "}</Text>
+              <Text color={COLOR.accent}>
+                {active ? `${ICON.pointer} ` : "  "}
+              </Text>
               <Text
-                color={it.danger ? COLOR.bad : here ? COLOR.accent : undefined}
-                bold={here}
-                dimColor={!here && !it.danger}
+                color={
+                  it.danger ? COLOR.bad : active ? COLOR.accent : undefined
+                }
+                bold={active}
+                dimColor={!active && !it.danger}
               >
                 {it.name.padEnd(nameWidth)}
               </Text>
               <Text
-                color={
-                  it.danger
-                    ? COLOR.bad
-                    : it.action
-                      ? COLOR.alt
-                      : it.set
-                        ? COLOR.alt
-                        : undefined
-                }
-                dimColor={!here && !it.danger && !it.action && !it.set}
+                color={detailColor}
+                dimColor={!it.set && !it.danger}
               >
-                {`   ${truncate(it.detail, Math.max(16, cols - 24))}`}
+                {`   ${truncate(it.detail, DETAIL_MAX)}`}
               </Text>
             </Box>
           );

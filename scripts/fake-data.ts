@@ -162,6 +162,8 @@ export function makeStore(overrides: Partial<Store> = {}): Store {
     setRegion: () => {},
     captureMode: "none",
     setCaptureMode: () => {},
+    playlistsDepth: "sets",
+    setPlaylistsDepth: () => {},
     pendingSearch: false,
     setPendingSearch: () => {},
     pendingAdd: null,

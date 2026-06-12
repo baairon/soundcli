@@ -3,6 +3,7 @@
 // spotDL asks yt-dlp for several candidates, then scores them; here we just
 // gather the candidates (scoring lives in spotify/match.ts).
 
+import { youtubeVideoUrl } from "../sources/youtube";
 import { enumerate } from "./ytdlp";
 
 /** A YouTube search hit we can score and download. */
@@ -12,14 +13,8 @@ export interface YouTubeCandidate {
   uploader?: string;
   /** Duration in seconds, if yt-dlp reported it in the flat listing. */
   duration?: number;
-  /** Canonical watch URL we hand to the downloader. */
+  /** Canonical YouTube video URL for the downloader. */
   url: string;
-}
-
-/** Build a watch URL from a video id (flat search results give bare ids). */
-function watchUrl(idOrUrl: string | undefined, id: string): string {
-  if (idOrUrl && idOrUrl.startsWith("http")) return idOrUrl;
-  return `https://www.youtube.com/watch?v=${id}`;
 }
 
 /**
@@ -29,7 +24,7 @@ function watchUrl(idOrUrl: string | undefined, id: string): string {
  *
  * @param query - Free text, e.g. "Daft Punk Get Lucky".
  * @param n - How many candidates to request (spotDL-style small N, e.g. 5).
- * @returns Candidates with id, title, uploader, duration, and a watch URL.
+ * @returns Candidates with id, title, uploader, duration, and a video URL.
  */
 export async function searchYouTube(
   query: string,
@@ -46,6 +41,6 @@ export async function searchYouTube(
       title: e.title,
       uploader: e.uploader,
       duration: e.duration,
-      url: watchUrl(e.url, e.id),
+      url: youtubeVideoUrl(e.url ?? e.id),
     }));
 }

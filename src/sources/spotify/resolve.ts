@@ -1,4 +1,4 @@
-// Resolve a Spotify track to an exact YouTube watch URL, the way spotDL's
+// Resolve a Spotify track to an exact YouTube video URL, the way spotDL's
 // search_and_download does (search providers/audio/base.py -> get_best_result).
 // We search a handful of YouTube candidates, score them with the ported
 // matching heuristics, and return the best video's URL (or null if none clears
@@ -17,12 +17,12 @@ function searchText(track: SourceTrack): string {
 }
 
 /**
- * Resolve a Spotify SourceTrack to an exact YouTube watch URL via candidate
+ * Resolve a Spotify SourceTrack to an exact YouTube video URL via candidate
  * search + scoring. Returns null when no candidate is a good enough match (the
  * download path then falls back to the stored ytsearch1: URL).
  *
  * @param track - The Spotify-sourced track (title, artist, duration).
- * @returns A watch URL string, or null if nothing matched well.
+ * @returns A video URL string, or null if nothing matched well.
  */
 export async function resolveSpotifyDownloadUrl(
   track: SourceTrack,

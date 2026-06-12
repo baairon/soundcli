@@ -8,6 +8,8 @@ import { makeYoutube } from "../../sources/youtube";
 import { makeSoundcloud } from "../../sources/soundcloud";
 import { makeSpotify } from "../../sources/spotify/adapter";
 import { mpvInstallHint } from "../../player/playback";
+import { normalizeHandle } from "../../sources/handle";
+import { persistableHandle } from "../../sources/persist-handle";
 import { displayPath } from "../../util/format";
 import { wrapStep } from "../move";
 import { COLOR, ICON } from "../theme";
@@ -27,25 +29,28 @@ const SOURCES: {
   hint: string;
 }[] = [
   { id: "youtube", name: "YouTube", hint: "Your public playlists" },
-  { id: "soundcloud", name: "SoundCloud", hint: "Your likes & sets" },
-  { id: "spotify", name: "Spotify", hint: "A playlist link" },
+  { id: "soundcloud", name: "SoundCloud", hint: "Your likes & playlists" },
+  { id: "spotify", name: "Spotify", hint: "Your public playlists" },
 ];
 
 const PROMPTS: Record<
   Exclude<SourceId, "link">,
-  { hint: string; placeholder: string }
+  { title: string; hint: string; placeholder: string }
 > = {
   youtube: {
-    hint: "Just the handle, no @ or link",
-    placeholder: "NASA",
+    title: "Your YouTube handle or link",
+    hint: "Type a handle, or paste any channel or playlist link",
+    placeholder: "@username or URL",
   },
   soundcloud: {
-    hint: "Just the handle, no link",
-    placeholder: "flume",
+    title: "Your SoundCloud handle or link",
+    hint: "Type a handle, or paste any profile or playlist link",
+    placeholder: "@username or URL",
   },
   spotify: {
-    hint: "Open a playlist in Spotify and copy its link",
-    placeholder: "https://open.spotify.com/playlist/...",
+    title: "Your Spotify handle or link",
+    hint: "Type a handle, or paste any profile or playlist link",
+    placeholder: "@username or URL",
   },
 };
 
@@ -147,14 +152,14 @@ export function Welcome() {
   function savedValue(src: SourceId): string | undefined {
     if (src === "youtube") return config.youtubeHandle;
     if (src === "soundcloud") return config.soundcloudHandle;
-    return config.spotifyProfile;
+    return config.spotifyHandle;
   }
 
   function saveHandle(src: SourceId, value: string): void {
     if (src === "youtube") setConfig({ ...config, youtubeHandle: value });
     else if (src === "soundcloud")
       setConfig({ ...config, soundcloudHandle: value });
-    else setConfig({ ...config, spotifyProfile: value });
+    else setConfig({ ...config, spotifyHandle: value });
   }
 
   async function startLoading(src: SourceId, value: string): Promise<void> {
@@ -165,7 +170,9 @@ export function Welcome() {
       const lists = await adapter.listPlaylists();
       if (lists.length === 0) {
         setError(
-          `Couldn't find anything public for "${value}". Check the handle and try again.`,
+          `Couldn't find anything public for "${
+            value.startsWith("http") ? value : `@${normalizeHandle(value)}`
+          }". Check the handle and try again.`,
         );
         setStep("error");
         return;
@@ -228,7 +235,12 @@ export function Welcome() {
   function onHandleSubmit(value: string): void {
     const v = value.trim();
     if (!v || !source) return;
-    saveHandle(source, v);
+
+    const handle = persistableHandle(source, v);
+    if (handle !== undefined) {
+      saveHandle(source, handle);
+    }
+
     void startLoading(source, v);
   }
 
@@ -301,7 +313,7 @@ export function Welcome() {
       <Box flexDirection="column">
         <Box>
           <Text bold color={COLOR.text}>
-            {`Your ${sourceName} handle`}
+            {`Your ${sourceName} handle or link`}
           </Text>
         </Box>
         <Text dimColor>{p.hint}</Text>
@@ -325,8 +337,8 @@ export function Welcome() {
     const label =
       source === "spotify"
         ? "Reading your Spotify playlist…"
-        : `Looking through @${handle}'s ${
-            SOURCES.find((s) => s.id === source)?.name ?? "library"
+        : `Loading ${
+            handle.startsWith("http") ? "link" : `@${normalizeHandle(handle)}`
           }…`;
     return (
       <Box flexDirection="column">

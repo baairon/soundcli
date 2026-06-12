@@ -61,6 +61,18 @@ describe("detectInput", () => {
       kind: "track",
       value: "https://youtube.com/shorts/xyz",
     });
+    // A watch link with a radio/mix attached is still one video: the
+    // &list=RD…&start_radio is dropped so yt-dlp never chases the endless mix.
+    expect(
+      detectInput(
+        "https://www.youtube.com/watch?v=lRS2ciJ5rOk&list=RDlRS2ciJ5rOk&start_radio=1",
+      ),
+    ).toEqual({
+      ok: true,
+      source: "youtube",
+      kind: "track",
+      value: "https://www.youtube.com/watch?v=lRS2ciJ5rOk",
+    });
   });
 
   it("detects YouTube playlist links as collections", () => {
@@ -164,6 +176,18 @@ describe("detectInput", () => {
       kind: "collection",
       value: "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M",
     });
+    expect(detectInput("https://open.spotify.com/user/spotify")).toEqual({
+      ok: true,
+      source: "spotify",
+      kind: "profile",
+      value: "spotify",
+    });
+    expect(detectInput("spotify:user:myname")).toEqual({
+      ok: true,
+      source: "spotify",
+      kind: "profile",
+      value: "myname",
+    });
   });
 
   it("returns null for bare handles and unrecognized hosts", () => {
@@ -219,6 +243,10 @@ describe("detectPasteLink", () => {
     expect(detectPasteLink("soundcloud.com/somehandle/likes")).toMatchObject({
       ok: false,
       source: "soundcloud",
+    });
+    expect(detectPasteLink("https://open.spotify.com/user/spotify")).toMatchObject({
+      ok: false,
+      source: "spotify",
     });
   });
 

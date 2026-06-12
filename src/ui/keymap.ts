@@ -3,7 +3,7 @@
 // here means the quick hint and the full cheatsheet can never drift apart, and
 // the UI never has to dump a wall of commands at the user.
 
-import type { Region, Section } from "./store";
+import type { PlaylistsDepth, Region, Section } from "./store";
 
 export interface Hint {
   keys: string;
@@ -77,7 +77,11 @@ const ALWAYS: Hint = { keys: "?", label: "Keys" };
  * The handful of hints worth showing inline for the current focus. Always ends
  * with "? Keys" so the full set is one keystroke away without crowding the bar.
  */
-export function footerHints(region: Region, section: Section): Hint[] {
+export function footerHints(
+  region: Region,
+  section: Section,
+  playlistsDepth: PlaylistsDepth = "sets",
+): Hint[] {
   if (region === "sidebar") {
     return [
       { keys: "↑↓", label: "Move" },
@@ -101,17 +105,27 @@ export function footerHints(region: Region, section: Section): Hint[] {
         ALWAYS,
       ];
     case "playlists":
+      if (playlistsDepth === "songs") {
+        return [
+          { keys: "↵", label: "Play" },
+          { keys: "d", label: "Delete" },
+          { keys: "esc", label: "Back" },
+          ALWAYS,
+        ];
+      }
       return [
         { keys: "↵", label: "Open" },
+        { keys: "/", label: "Search" },
+        { keys: "[ ]", label: "Source" },
         { keys: "d", label: "Delete" },
-        { keys: "esc", label: "Back" },
         ALWAYS,
       ];
     case "history":
       return [
         { keys: "↵", label: "Play" },
+        { keys: "/", label: "Search" },
+        { keys: "[ ]", label: "Source" },
         { keys: "d", label: "Delete" },
-        { keys: "esc", label: "Back" },
         ALWAYS,
       ];
     case "library":

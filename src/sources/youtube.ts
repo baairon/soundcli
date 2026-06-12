@@ -1,5 +1,7 @@
 import { enumerate, type YtEntry } from "../ytdlp/ytdlp";
+import { linkCollectionTitle } from "../util/format";
 import { normalizeHandle, ownerFromHandle } from "./handle";
+import { detectInput } from "./detect";
 import type {
   SourceAdapter,
   SourcePlaylist,
@@ -17,15 +19,37 @@ function playlistUrlFromEntry(e: YtEntry): string {
 }
 
 /** YouTube by handle: lists the channel's public playlists (no auth/cookies). */
-export function makeYoutube(handle?: string): SourceAdapter {
-  const h = handle ? normalizeHandle(handle) : undefined;
-  const owner = handle ? ownerFromHandle(handle) : undefined;
+export function makeYoutube(input?: string): SourceAdapter {
+  const d = input ? detectInput(input) : null;
+  let h: string | undefined;
+  let owner: string | undefined;
+  let singleUrl: string | undefined;
+
+  if (d?.ok && d.source === "youtube") {
+    if (d.kind === "profile") {
+      h = d.value;
+      owner = ownerFromHandle(d.value);
+    } else {
+      singleUrl = d.value;
+    }
+  } else if (input) {
+    h = normalizeHandle(input);
+    owner = ownerFromHandle(input);
+  }
   return {
     id: "youtube",
     label: "YouTube",
     owner,
 
     async listPlaylists(): Promise<SourcePlaylist[]> {
+      if (singleUrl) {
+        return [{
+          id: "single",
+          title: linkCollectionTitle(singleUrl),
+          url: singleUrl,
+          kind: "playlist" as const,
+        }];
+      }
       if (!h) throw new Error("enter your YouTube handle first.");
       const col = await enumerate(`https://www.youtube.com/@${h}/playlists`, {});
       return col.entries
@@ -41,6 +65,10 @@ export function makeYoutube(handle?: string): SourceAdapter {
 
     async listTracks(playlist: SourcePlaylist): Promise<SourceTrack[]> {
       const col = await enumerate(playlist.url, {});
+      // A pasted link starts with a guessed title (linkCollectionTitle); now
+      // that we've fetched, yt-dlp's real collection name is the one to store.
+      const playlistTitle =
+        playlist.id === "single" ? col.title || playlist.title : playlist.title;
       return col.entries
         .filter((e) => e.id)
         .map((e) => ({
@@ -49,7 +77,7 @@ export function makeYoutube(handle?: string): SourceAdapter {
           artist: e.uploader,
           duration: e.duration,
           downloadUrl: youtubeVideoUrl(e.url ?? e.id),
-          playlistTitle: playlist.title,
+          playlistTitle,
           owner,
         }));
     },

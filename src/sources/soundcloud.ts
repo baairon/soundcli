@@ -2,8 +2,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { downloadLogFile } from "../config/paths";
 import { enumerate, type YtCollection } from "../ytdlp/ytdlp";
-import { slugTitle } from "../util/format";
+import { linkCollectionTitle, slugTitle } from "../util/format";
 import { normalizeHandle, ownerFromHandle } from "./handle";
+import { detectInput } from "./detect";
 import type {
   SourceAdapter,
   SourcePlaylist,
@@ -49,9 +50,30 @@ function logSkippedTombstones(count: number, playlistTitle: string): void {
  * SoundCloud by handle: lists the user's public liked songs, liked sets, and
  * their own created sets (no auth/cookies). Likes are public by default.
  */
-export function makeSoundcloud(handle?: string): SourceAdapter {
-  const user = handle ? normalizeHandle(handle) : undefined;
-  const owner = handle ? ownerFromHandle(handle) : undefined;
+function asUrl(raw: string): string {
+  const s = raw.trim();
+  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+}
+
+export function makeSoundcloud(input?: string): SourceAdapter {
+  const d = input ? detectInput(input) : null;
+  let user: string | undefined;
+  let owner: string | undefined;
+  let singleUrl: string | undefined;
+
+  if (input && isSetUrl(asUrl(input))) {
+    singleUrl = asUrl(input);
+  } else if (d?.ok && d.source === "soundcloud") {
+    if (d.kind === "profile") {
+      user = d.value;
+      owner = ownerFromHandle(d.value);
+    } else {
+      singleUrl = d.value;
+    }
+  } else if (input) {
+    user = normalizeHandle(input);
+    owner = ownerFromHandle(input);
+  }
 
   // The likes feed can be large (thousands of items), so enumerate it once and
   // reuse it for both discovering liked sets (listPlaylists) and downloading
@@ -70,6 +92,14 @@ export function makeSoundcloud(handle?: string): SourceAdapter {
     owner,
 
     async listPlaylists(): Promise<SourcePlaylist[]> {
+      if (singleUrl) {
+        return [{
+          id: "single",
+          title: linkCollectionTitle(singleUrl),
+          url: singleUrl,
+          kind: "playlist",
+        }];
+      }
       if (!user) throw new Error("enter your SoundCloud handle first.");
       const likesUrl = `https://soundcloud.com/${user}/likes`;
 
@@ -156,6 +186,10 @@ export function makeSoundcloud(handle?: string): SourceAdapter {
       if (entries.length < beforeTombstones) {
         logSkippedTombstones(beforeTombstones - entries.length, playlist.title);
       }
+      // A pasted set link starts with a slug-guessed title; once fetched, the
+      // feed's real set name is better. (Never for "liked" — that's our label.)
+      const playlistTitle =
+        playlist.id === "single" ? col.title || playlist.title : playlist.title;
       // The likes feed's flat entries often carry no title (or a bare numeric
       // ID); the track URL's slug holds the real name, so prefer it then.
       return entries.map((e) => ({
@@ -167,7 +201,7 @@ export function makeSoundcloud(handle?: string): SourceAdapter {
         artist: e.uploader,
         duration: e.duration,
         downloadUrl: e.url as string,
-        playlistTitle: playlist.title,
+        playlistTitle,
         owner,
       }));
     },

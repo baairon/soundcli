@@ -1,5 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { parseSpotifyInput } from "../sources/spotify/public";
+import { normalizeSpotifyHandle } from "../sources/spotify/handle";
 import { configFile, defaultLibraryDir } from "./paths";
 import { resolveDefaultLibraryDir } from "./music-dir";
 
@@ -10,7 +12,9 @@ export interface Config {
   youtubeHandle?: string;
   /** The user's SoundCloud handle (public likes + sets). */
   soundcloudHandle?: string;
-  /** A Spotify playlist link the user pasted; read tokenlessly. */
+  /** The user's Spotify username (public playlists on their profile). */
+  spotifyHandle?: string;
+  /** @deprecated Migrated to spotifyHandle when it was a user id. */
   spotifyProfile?: string;
   /** Whether the first-run wizard has completed. */
   firstRunComplete: boolean;
@@ -18,10 +22,17 @@ export interface Config {
   ytdlpAutoUpdate?: boolean;
 }
 
+/** Drop deprecated keys before returning config or writing it to disk. */
+export function stripDeprecatedConfig(config: Config): Config {
+  const { spotifyProfile: _, ...rest } = config;
+  return rest;
+}
+
 export const defaultConfig: Config = {
   libraryDir: defaultLibraryDir,
   youtubeHandle: undefined,
   soundcloudHandle: undefined,
+  spotifyHandle: undefined,
   spotifyProfile: undefined,
   firstRunComplete: false,
   ytdlpAutoUpdate: true,
@@ -39,7 +50,14 @@ export async function loadConfig(): Promise<Config> {
   }
   try {
     const parsed = JSON.parse(raw) as Partial<Config>;
-    return { ...defaultConfig, ...parsed };
+    const cfg = { ...defaultConfig, ...parsed };
+    if (!cfg.spotifyHandle && parsed.spotifyProfile) {
+      const ref = parseSpotifyInput(parsed.spotifyProfile);
+      if (ref.type === "user") {
+        cfg.spotifyHandle = normalizeSpotifyHandle(parsed.spotifyProfile);
+      }
+    }
+    return stripDeprecatedConfig(cfg);
   } catch {
     return { ...defaultConfig };
   }
@@ -47,7 +65,11 @@ export async function loadConfig(): Promise<Config> {
 
 export async function saveConfig(config: Config): Promise<void> {
   await fs.mkdir(path.dirname(configFile), { recursive: true });
-  await fs.writeFile(configFile, JSON.stringify(config, null, 2), "utf8");
+  await fs.writeFile(
+    configFile,
+    JSON.stringify(stripDeprecatedConfig(config), null, 2),
+    "utf8",
+  );
   // Pre-create the music folder so downloads and "open folder" always land
   // somewhere real; a bad path must never break a config save.
   await fs.mkdir(config.libraryDir, { recursive: true }).catch(() => {});

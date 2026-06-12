@@ -3,11 +3,23 @@
 // says where it's from.
 
 import { normalizeHandle, ownerFromHandle } from "./handle";
+import { normalizeSpotifyHandle } from "./spotify/handle";
 import { parseSpotifyInput } from "./spotify/public";
 import { sanitizeName } from "../ytdlp/args";
 import type { SourceId } from "../library/types";
 
 export type DetectKind = "profile" | "collection" | "track";
+
+/** Sources whose config field is a handle that re-enumerates many playlists. */
+const IDENTITY_SOURCES = new Set<SourceId>([
+  "youtube",
+  "soundcloud",
+  "spotify",
+]);
+
+export function sourceSupportsIdentity(source: SourceId): boolean {
+  return IDENTITY_SOURCES.has(source);
+}
 
 export type DetectResult =
   /** Recognized and usable. */
@@ -67,6 +79,24 @@ function withProtocol(raw: string): string {
   return /^https?:\/\//i.test(s) ? s : `https://${s}`;
 }
 
+/**
+ * Reduce a YouTube watch URL to just its video: a pasted link often carries a
+ * `&list=RD…&start_radio=1` mix, and yt-dlp would otherwise try to enumerate
+ * that endless auto-playlist and hang. Keeps the original host/path (so
+ * youtube.com vs www. vs music. is preserved), dropping every param but `v`.
+ */
+function youtubeWatchUrl(raw: string): string {
+  const withProto = withProtocol(raw);
+  try {
+    const u = new URL(withProto);
+    const id = u.searchParams.get("v");
+    if (id) return `${u.origin}${u.pathname}?v=${id}`;
+  } catch {
+    // not parseable: fall back to the raw link
+  }
+  return withProto;
+}
+
 function pathSegments(path: string): string[] {
   return path.replace(/^\//, "").split(/[/?#]/).filter(Boolean);
 }
@@ -90,7 +120,12 @@ export function detectInput(raw: string): DetectResult {
       return { ok: true, source: "spotify", kind: "collection", value: s };
     }
     if (ref.type === "user") {
-      return { ok: false, source: "spotify", reason: "Paste a playlist or track link from Spotify." };
+      return {
+        ok: true,
+        source: "spotify",
+        kind: "profile",
+        value: normalizeSpotifyHandle(s),
+      };
     }
     return { ok: false, source: "spotify", reason: "That doesn't look like a Spotify link." };
   }
@@ -113,7 +148,12 @@ export function detectInput(raw: string): DetectResult {
       return { ok: true, source: "spotify", kind: "collection", value: withProtocol(s) };
     }
     if (ref.type === "user") {
-      return { ok: false, source: "spotify", reason: "Paste a playlist or track link from Spotify." };
+      return {
+        ok: true,
+        source: "spotify",
+        kind: "profile",
+        value: normalizeSpotifyHandle(s),
+      };
     }
     return { ok: false, source: "spotify", reason: "That doesn't look like a Spotify link." };
   }
@@ -165,7 +205,7 @@ export function detectInput(raw: string): DetectResult {
 
   if (host === "youtube.com" || host === "music.youtube.com") {
     if (firstSegment === "watch" || path.includes("v=")) {
-      return { ok: true, source: "youtube", kind: "track", value: withProtocol(s) };
+      return { ok: true, source: "youtube", kind: "track", value: youtubeWatchUrl(s) };
     }
     if (firstSegment === "shorts" && segments[1]) {
       return { ok: true, source: "youtube", kind: "track", value: withProtocol(s) };
@@ -188,6 +228,22 @@ export function detectInput(raw: string): DetectResult {
   }
 
   return null;
+}
+
+/**
+ * Refine {@link DetectKind} for persistence policy. {@link detectInput} labels
+ * some collection-shaped SoundCloud paths as profiles so adapters can still
+ * open them; saving those URLs as a "handle" would be wrong on the next run.
+ */
+export function effectiveKind(
+  raw: string,
+  d: Extract<DetectResult, { ok: true }>,
+): DetectKind {
+  if (d.kind !== "profile") return d.kind;
+  if (d.source === "soundcloud" && /\/sets\/[^/?#]+/.test(raw)) {
+    return "collection";
+  }
+  return d.kind;
 }
 
 export type PasteLinkResult =
