@@ -1,72 +1,52 @@
 <p align="center">
-  <img src="preview/welcome.svg" width="780" alt="A terminal dashboard for downloading and playing your music">
+  <img src="preview/welcome.svg" alt="A terminal dashboard for downloading and playing your music" style="max-width: 832px; width: 100%; height: auto;">
 </p>
 
-Own your music. soundcli saves your YouTube, SoundCloud, and Spotify libraries as real audio files on your computer, then plays them offline. No account, no subscription, no cloud. The files are yours.
+Own your music. soundcli downloads your YouTube, SoundCloud, and Spotify libraries to your computer and plays them offline, straight from your terminal. Every song lands on your own drive as a real file, yours to keep and ready the moment you want it.
 
 ## Get started
 
-You only need to do the first two steps once.
+You only have to do this once. soundcli handles the rest itself.
 
-1. **Download Node.js.** Go to [nodejs.org](https://nodejs.org), download it, and just click "Next" through the installer.
-2. **Open your command window.**
-   - Windows: press the Windows key, type `terminal`, and press Enter.
-   - Mac: press Cmd and Space together, type `terminal`, and press Enter.
-3. **Start the app.** Paste this line into the window and press Enter:
+1. **Install Node.js.**  
+   Visit [nodejs.org](https://nodejs.org), download the installer, and click **Next** until it finishes. It's the one piece of software soundcli runs on.
 
-```sh
-npx sndcli
-```
+2. **Open your terminal.**  
+   On **Windows**, press the Windows key, type `terminal`, and press Enter. On a **Mac**, press `Cmd + Space`, type `terminal`, and press Enter. A plain window will open. That's the terminal, and it's all you need to get going.
 
-That's it. Everything else sets itself up automatically.
+3. **Start soundcli.**  
+   Copy the line below, paste it into the terminal, and press **Enter**:
 
-## Your first run
+   ```sh
+   npx sndcli
+   ```
 
-soundcli shows where your songs will be saved (a tidy folder inside your Music folder), then asks where your music comes from. Pick YouTube, SoundCloud, or Spotify, type your name on that platform or paste a link to any playlist, album, or song, and your library starts downloading right away. You can listen while it works.
+From there soundcli takes over, downloading the few tools it needs and setting everything up on its own.
 
-<p align="center">
-  <img src="preview/library.svg" width="780" alt="The library view: sidebar, your songs, and the player mid-song">
-</p>
+## The first run
 
-## What you get
+The first time it opens, soundcli shows you where your music will be saved: a dedicated folder inside your computer's Music folder, so you always know where your files are.
 
-Songs download in their native format at original quality, with the artwork and artist info already embedded, organized into tidy folders by source and playlist. You can paste almost anything: a profile, a playlist, an album, a likes feed, or a single track link. Public Spotify playlists and albums work without logging in; each track is matched to the right audio by checking duration and wording, so covers and sped-up edits don't sneak in.
-
-Your library is the source of truth. Re-running a playlist only fetches what's new, the same song never downloads twice even across sources, and downloads pick up where they left off if you close the app.
-
-Playback works fully offline with all the usual controls: pause, seek, next and previous, shuffle, repeat, and volume.
-
-## Keys
-
-Press `?` in the app to see this anytime. The footer only ever shows the few keys that matter right now, so there's nothing to memorize.
+Then it asks where your music comes from. Pick **YouTube**, **SoundCloud**, or **Spotify**, then type your username or paste a link to a playlist, an album, or a single track. Downloading starts right away, and you can begin listening while the rest of your library finishes.
 
 <p align="center">
-  <img src="preview/keys.svg" width="780" alt="The keyboard cheatsheet: navigate, player, and download keys">
+  <img src="preview/library.svg" alt="The library view: sidebar, your songs, and the player mid-song" style="max-width: 832px; width: 100%; height: auto;">
 </p>
 
-<details>
-<summary><b>How it works</b> (the technical bits)</summary>
+## Your library, kept in order
 
-soundcli keeps its install tiny by fetching the tools it needs directly from their official releases:
+Every track downloads in its original quality, with album artwork and artist details included, and gets sorted into folders automatically so your collection stays organized. Almost any link works: playlists, albums, artist profiles, your likes, or a single song. Public Spotify playlists and albums work without signing in.
 
-- **yt-dlp** (download engine): Downloads on first run and updates automatically in the background to handle API changes.
-- **ffmpeg** (audio converter): Downloads on first run and self-repairs if the binary ever breaks.
-- **mpv** (player): Installs automatically on Windows (winget) and macOS (brew). On Linux, it provides a one-line install command.
+It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. Once a track is saved, it's there for good.
 
-Tool binaries land in your system's standard cache folder, and your music is saved to your default Music folder (`~/Music/soundcli`).
+## Playing it back
 
-Requires Node 22 or newer.
+Everything runs from the keyboard, with controls that are quick to pick up. Press `?` anytime for the full list of keys. The bar along the bottom of the screen only shows the few that matter right now, so there's nothing to memorize.
 
-</details>
+<p align="center">
+  <img src="preview/keys.svg" alt="The keyboard cheatsheet: navigate, player, and download keys" style="max-width: 832px; width: 100%; height: auto;">
+</p>
 
 ## Privacy
 
-soundcli is built to be a fully local experience. There are no accounts, no logins, and no tracking.
-
-The application only connects to the internet to:
-- Download your requested music.
-- Perform a one-time setup of the required audio tools.
-- Keep those tools up to date so downloads continue working.
-- Install an offline audio player if your computer needs one.
-
-All application data and logs are stored locally on your machine.
+soundcli runs on your computer and nowhere else. There are no accounts, no logins, and nothing tracking what you play. It connects to the internet for three reasons only: to download the music you ask for, to set itself up the first time, and to keep its own tools current so downloads keep working. Everything else stays with you.
