@@ -36,6 +36,23 @@ export function formatDuration(sec?: number): string {
   return `${m}:${s}`;
 }
 
+/**
+ * Coarse total runtime for a set's subtitle: "47 min", "1h 23m", "2h".
+ * Returns "" for no/zero duration so the caller can drop the segment cleanly.
+ * (formatDuration stays the per-track m:ss form.)
+ */
+export function formatRuntime(totalSec?: number): string {
+  if (totalSec === undefined || !Number.isFinite(totalSec) || totalSec <= 0) {
+    return "";
+  }
+  const mins = Math.round(totalSec / 60);
+  if (mins <= 0) return "<1 min";
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
 /** True for code points that render as boxes / "?" in a terminal (emoji, symbols, controls). */
 function isJunkCodePoint(cp: number): boolean {
   if (cp < 0x20 || cp === 0x7f) return true; // control chars
@@ -98,6 +115,48 @@ export function trackDisplayTitle(track: {
   const fromSlug = slugTitle(track.downloadUrl);
   if (fromSlug) return fromSlug;
   return track.artist ? cleanText(track.artist) : "Untitled track";
+}
+
+/** Strip scheme and www/m. prefix for a compact URL line in the UI. */
+export function displayUrl(url: string): string {
+  return url
+    .replace(/^https?:\/\//i, "")
+    .replace(/^(?:www|m)\./i, "");
+}
+
+/**
+ * Human label for a pasted collection or track URL. Adapters use this instead
+ * of the literal "URL" when listPlaylists returns a single direct link.
+ */
+export function linkCollectionTitle(url: string): string {
+  const fromSlug = slugTitle(url);
+  if (fromSlug) return fromSlug;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^(?:www|m)\./i, "").toLowerCase();
+    if (host.includes("spotify.com")) {
+      const kind = u.pathname.split("/").filter(Boolean)[0];
+      if (kind === "album") return "Spotify album";
+      if (kind === "playlist") return "Spotify playlist";
+      if (kind === "track") return "Spotify track";
+    }
+    if (host.includes("youtube.com") || host === "youtu.be") {
+      if (u.searchParams.has("list") || u.pathname.startsWith("/playlist")) {
+        return "YouTube playlist";
+      }
+      return "YouTube video";
+    }
+    if (host === "soundcloud.com") {
+      const parts = u.pathname.split("/").filter(Boolean);
+      if (parts[1] === "sets" && parts[2]) {
+        return cleanText(parts[2].replace(/[-_]+/g, " "));
+      }
+      return "SoundCloud link";
+    }
+    return cleanText(host);
+  } catch {
+    return "This link";
+  }
 }
 
 /** Truncate to `max` characters with a trailing ellipsis. */

@@ -3,6 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { Select } from "@inkjs/ui";
 import { useStore, useQueueItems, useLibrary, usePlayback } from "../store";
 import { Header } from "../components/Header";
+import { SourceTabs, type SourceFilter } from "../components/SourceTabs";
 import { TextField } from "../components/TextField";
 import { SongList, type SongGroup } from "../components/SongList";
 import { COLOR, ICON } from "../theme";
@@ -11,9 +12,6 @@ import { deleteTracks } from "../../library/delete";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
 
 const SOURCE_ORDER: SourceId[] = ["youtube", "soundcloud", "spotify", "link"];
-
-/** The library can be narrowed to one source ("all" shows every source). */
-type Filter = "all" | SourceId;
 
 /** Fisher-Yates shuffle (returns a new array). */
 function shuffle<T>(arr: T[]): T[] {
@@ -50,7 +48,7 @@ export function Library() {
   // Text search + a source tab filter.
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState(false);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<SourceFilter>("all");
   const searching = q.trim().length > 0;
   // Pending one-song delete, shown as a y/esc confirm in the search row.
   const [confirm, setConfirm] = useState<{ id: string; title: string } | null>(
@@ -70,7 +68,10 @@ export function Library() {
     const set = new Set(songs.map((t) => t.source));
     return SOURCE_ORDER.filter((s) => set.has(s));
   }, [songs]);
-  const tabs = useMemo<Filter[]>(() => ["all", ...presentSources], [presentSources]);
+  const tabs = useMemo<SourceFilter[]>(
+    () => ["all", ...presentSources],
+    [presentSources],
+  );
 
   // Per-source totals shown beside each tab, so the bar reads as a real
   // segmented control. Counts reflect the whole library, not the search.
@@ -79,7 +80,7 @@ export function Library() {
     for (const t of songs) m.set(t.source, (m.get(t.source) ?? 0) + 1);
     return m;
   }, [songs]);
-  const tabCount = (tb: Filter): number =>
+  const tabCount = (tb: SourceFilter): number =>
     tb === "all" ? songs.length : countBySource.get(tb) ?? 0;
 
   // If the active source disappears (e.g. its last song is removed), fall back.
@@ -216,21 +217,7 @@ export function Library() {
   return (
     <Box flexDirection="column">
       <Header title="Library" subtitle={subtitle} focused={focused} />
-      {/* Source tabs: a segmented bar, each with its count; active is accented. */}
-      <Box>
-        {tabs.map((tb, i) => {
-          const here = tb === filter;
-          return (
-            <Box key={tb}>
-              {i > 0 ? <Text>{"   "}</Text> : null}
-              <Text color={here ? COLOR.accent : undefined} dimColor={!here} bold={here}>
-                {tb === "all" ? "All" : SOURCE_LABELS[tb]}
-              </Text>
-              <Text dimColor>{` ${tabCount(tb)}`}</Text>
-            </Box>
-          );
-        })}
-      </Box>
+      <SourceTabs tabs={tabs} active={filter} count={tabCount} />
       {/* The search row doubles as the delete confirm: same single row, so
           the list's height budget never moves. */}
       <Box marginBottom={1}>
@@ -244,7 +231,7 @@ export function Library() {
             {focused && editing ? (
               <TextField
                 defaultValue={q}
-                placeholder="Filter by name…"
+                placeholder="Search by name…"
                 onChange={setQ}
                 onSubmit={() => setEditing(false)}
               />

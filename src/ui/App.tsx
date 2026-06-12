@@ -20,6 +20,7 @@ import { PlayHistory } from "../player/history";
 import {
   StoreContext,
   type CaptureMode,
+  type PlaylistsDepth,
   type Region,
   type Section,
   type Store,
@@ -151,6 +152,8 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   const [showHelp, setShowHelp] = useState(false);
   const [pendingSearch, setPendingSearch] = useState(false);
   const [pendingAdd, setPendingAdd] = useState<string | null>(null);
+  const [playlistsDepth, setPlaylistsDepth] =
+    useState<PlaylistsDepth>("sets");
 
   useEffect(() => {
     if (booting.current) return;
@@ -392,9 +395,15 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
           return;
         }
         // Search is one key away from anywhere: land in the Library with the
-        // search box already open. (Inside the playlist picker, "/" keeps its
-        // local filter meaning, hence the capture gate.)
+        // search box already open. Sections with their own search (playlists,
+        // history) or paste (download) keep "/" local via this guard.
         if (input === "/") {
+          if (
+            section === "playlists" ||
+            section === "download" ||
+            section === "history"
+          )
+            return;
           setSection("library");
           setRegion("content");
           setPendingSearch(true);
@@ -455,6 +464,8 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       setRegion,
       captureMode,
       setCaptureMode,
+      playlistsDepth,
+      setPlaylistsDepth,
       pendingSearch,
       setPendingSearch,
       pendingAdd,
@@ -473,6 +484,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     region,
     showHelp,
     captureMode,
+    playlistsDepth,
     pendingSearch,
     pendingAdd,
     mpvStatus,
@@ -578,7 +590,11 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
             >
             {showDivider ? <Rule width={ruleWidth} /> : null}
             <NowPlayingBar />
-            {showFooter ? <Footer hints={footerHints(region, section)} /> : null}
+            {showFooter ? (
+              <Footer
+                hints={footerHints(region, section, playlistsDepth)}
+              />
+            ) : null}
             </Box>
           </>
         )}

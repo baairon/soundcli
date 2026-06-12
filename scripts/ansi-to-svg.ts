@@ -13,6 +13,8 @@ export interface AnsiToSvgOptions {
   bg?: string;
   /** Optional window title, drawn dim and centered in the titlebar. */
   title?: string;
+  /** Cap rendered width (px); scales down on narrow viewports, never stretches wider. */
+  maxWidth?: number;
 }
 
 interface Style {
@@ -161,18 +163,19 @@ function escapeXml(s: string): string {
 const fmt = (n: number): string => String(Math.round(n * 100) / 100);
 
 export function ansiToSvg(frame: string, opts: AnsiToSvgOptions): string {
-  const { cols, bg = BG, title } = opts;
+  const { cols, bg = BG, title, maxWidth } = opts;
   const lines = frame.replace(/\r/g, "").split("\n");
   // Drop a single trailing blank line (a frame ending in "\n" is common).
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
   const width = cols * CHAR_W + PAD * 2;
   const height = HEADER_H + lines.length * LINE_H + PAD * 2;
+  const cap = maxWidth ?? width;
 
   const out: string[] = [];
   out.push(`<?xml version="1.0" encoding="UTF-8"?>`);
   out.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(width)}" height="${fmt(height)}" viewBox="0 0 ${fmt(width)} ${fmt(height)}" role="img">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(width)}" height="${fmt(height)}" viewBox="0 0 ${fmt(width)} ${fmt(height)}" style="max-width: ${fmt(cap)}px; width: 100%; height: auto;" role="img">`,
   );
   out.push(`  <rect width="100%" height="100%" rx="${RADIUS}" fill="${bg}"/>`);
   out.push(

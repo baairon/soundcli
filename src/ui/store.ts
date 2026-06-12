@@ -31,6 +31,9 @@ export type Region = "sidebar" | "content" | "help";
  */
 export type CaptureMode = "none" | "text" | "picker" | "esc";
 
+/** Playlists section: browsing sets vs songs inside one set. */
+export type PlaylistsDepth = "sets" | "songs";
+
 export interface Store {
   config: Config;
   setConfig: (c: Config) => void;
@@ -47,6 +50,9 @@ export interface Store {
   /** How much of the keyboard the focused widget claims (see CaptureMode). */
   captureMode: CaptureMode;
   setCaptureMode: (m: CaptureMode) => void;
+  /** Playlists drill-down depth, so the footer can drop set-only keys. */
+  playlistsDepth: PlaylistsDepth;
+  setPlaylistsDepth: (d: PlaylistsDepth) => void;
   /** One-shot intent: open the Library search box on its next render (set by
    *  the global `/`); the consumer clears it. */
   pendingSearch: boolean;
