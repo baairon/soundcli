@@ -22,7 +22,7 @@ export interface SpotifyUserProfile {
  */
 export async function readPublicUserProfile(
   userId: string,
-  playlistLimit = 50,
+  playlistLimit = 200,
 ): Promise<SpotifyUserProfile> {
   const { accessToken, clientId } = await getWebPlayerToken();
   const url =

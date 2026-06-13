@@ -7,6 +7,7 @@ import { TextField } from "../components/TextField";
 import { makeYoutube } from "../../sources/youtube";
 import { makeSoundcloud } from "../../sources/soundcloud";
 import { makeSpotify } from "../../sources/spotify/adapter";
+import { clearPartials } from "../../sources/partials";
 import { mpvInstallHint } from "../../player/playback";
 import { normalizeHandle } from "../../sources/handle";
 import { persistableHandle } from "../../sources/persist-handle";
@@ -191,6 +192,7 @@ export function Welcome() {
   ): Promise<void> {
     setStep("downloading");
     setGather({ done: 0, total: lists.length });
+    clearPartials();
     let addedAny = false;
     let gathered = 0;
     let cursor = 0;

@@ -18,6 +18,9 @@ import {
   clearSpotifyCache,
 } from "../src/sources/spotify/public";
 import { sanitizeName } from "../src/ytdlp/args";
+import { readFullPlaylist } from "../src/sources/spotify/full";
+import { gidFromId } from "../src/sources/spotify/gid";
+import { clearPartials, getPartials } from "../src/sources/partials";
 
 /** Build an embed HTML page with the __NEXT_DATA__ trackList the reader parses. */
 function embedHtml(
@@ -61,7 +64,45 @@ beforeEach(() => {
   fetchResilientMock.mockReset();
   clearSpotifyCache();
   clearSpotifyTokenCache();
+  clearPartials();
 });
+
+/** A web-player token mint (secrets, server time, token) for spclient tests. */
+function tokenResponse(url: string): Response | null {
+  if (url.includes("secretDict.json")) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ "61": [62, 54, 109, 83, 107] }),
+    } as unknown as Response;
+  }
+  if (url === "https://open.spotify.com/") {
+    return {
+      ok: true,
+      status: 200,
+      headers: {
+        get: (k: string) =>
+          k.toLowerCase() === "date" ? new Date().toUTCString() : null,
+      },
+    } as unknown as Response;
+  }
+  if (url.includes("/api/token")) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        accessToken: "tok",
+        clientId: "cid",
+        accessTokenExpirationTimestampMs: Date.now() + 60_000,
+      }),
+    } as unknown as Response;
+  }
+  return null;
+}
+
+function jsonResponse(obj: unknown): Response {
+  return { ok: true, status: 200, json: async () => obj } as unknown as Response;
+}
 
 describe("parseSpotifyInput", () => {
   it("parses playlist URLs, URIs, and bare ids", () => {
@@ -272,5 +313,103 @@ describe("makeSpotify adapter (album / track links + cache reuse)", () => {
     expect(playlists[0]?.url).toBe("spotify:track:TRACKID");
     const tracks = await adapter.listTracks(playlists[0]!);
     expect(tracks[0]?.title).toBe("Solo Song");
+  });
+});
+
+describe("readFullPlaylist (spclient full read, embed fallback)", () => {
+  const embedIds = Array.from({ length: 100 }, (_, i) => `e${i}`);
+  const overflowIds = Array.from({ length: 20 }, (_, i) => `o${i}`);
+  const allUris = [...embedIds, ...overflowIds].map((x) => `spotify:track:${x}`);
+
+  /** Wire token + embed + (optionally) playlist/v2 + metadata/4 responses. */
+  function backend(opts: {
+    embedTitle: string;
+    embedTracks: string[];
+    v2?: { length: number; uris: string[] } | "fail";
+    resolvableOverflow?: string[];
+  }): void {
+    const metaByGid = new Map<string, unknown>();
+    for (const id of opts.resolvableOverflow ?? []) {
+      metaByGid.set(gidFromId(id), {
+        name: `Over ${id}`,
+        artist: [{ name: `Art ${id}` }],
+        duration: 123000,
+      });
+    }
+    fetchResilientMock.mockImplementation(async (url: string) => {
+      const tok = tokenResponse(url);
+      if (tok) return tok;
+      if (url.includes("/embed/playlist/")) {
+        return okResponse(
+          embedHtml(
+            opts.embedTitle,
+            opts.embedTracks.map((id) => ({ id, title: `Embed ${id}` })),
+          ),
+        );
+      }
+      if (url.includes("/playlist/v2/playlist/")) {
+        if (opts.v2 === "fail" || !opts.v2) {
+          return { ok: false, status: 500, json: async () => ({}) } as unknown as Response;
+        }
+        return jsonResponse({
+          length: opts.v2.length,
+          contents: { items: opts.v2.uris.map((uri) => ({ uri })) },
+        });
+      }
+      const m = url.match(/metadata\/4\/track\/([0-9a-f]+)/);
+      if (m) {
+        const meta = metaByGid.get(m[1]!);
+        return meta
+          ? jsonResponse(meta)
+          : ({ ok: false, status: 404, json: async () => ({}) } as unknown as Response);
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+  }
+
+  it("reads past the 100-track embed cap via playlist/v2 + metadata/4", async () => {
+    backend({
+      embedTitle: "Big Mix",
+      embedTracks: embedIds,
+      v2: { length: 120, uris: allUris },
+      resolvableOverflow: overflowIds,
+    });
+    const pl = await readFullPlaylist("BIG");
+    expect(pl.name).toBe("Big Mix");
+    expect(pl.tracks).toHaveLength(120);
+    expect(pl.tracks[0]).toMatchObject({ id: "e0", title: "Embed e0" });
+    expect(pl.tracks[119]).toMatchObject({ id: "o19", title: "Over o19", artist: "Art o19" });
+    expect(getPartials()).toHaveLength(0);
+  });
+
+  it("records a cut-short notice when some overflow tracks can't be resolved", async () => {
+    backend({
+      embedTitle: "Partial Mix",
+      embedTracks: embedIds,
+      v2: { length: 120, uris: allUris },
+      resolvableOverflow: overflowIds.slice(0, 18), // two 404
+    });
+    const pl = await readFullPlaylist("PART");
+    expect(pl.tracks).toHaveLength(118);
+    expect(getPartials()).toEqual([
+      { source: "spotify", title: "Partial Mix", got: 118, total: 120 },
+    ]);
+  });
+
+  it("falls back to the embed (<=100) when the spclient path fails", async () => {
+    backend({ embedTitle: "Capped", embedTracks: embedIds, v2: "fail" });
+    const pl = await readFullPlaylist("CAP");
+    expect(pl.tracks).toHaveLength(100);
+    expect(getPartials()).toHaveLength(0);
+  });
+
+  it("uses only the embed for a playlist under the cap (no token, no spclient)", async () => {
+    const small = Array.from({ length: 30 }, (_, i) => `e${i}`);
+    backend({ embedTitle: "Small", embedTracks: small });
+    const pl = await readFullPlaylist("SMALL");
+    expect(pl.tracks).toHaveLength(30);
+    // Only the embed was fetched: no token mint, no spclient calls.
+    expect(fetchResilientMock).toHaveBeenCalledTimes(1);
+    expect(fetchResilientMock.mock.calls[0]?.[0]).toContain("/embed/playlist/");
   });
 });

@@ -12,6 +12,11 @@ import { persistableHandle } from "../../sources/persist-handle";
 import { makeYoutube } from "../../sources/youtube";
 import { makeSoundcloud } from "../../sources/soundcloud";
 import { makeSpotify } from "../../sources/spotify/adapter";
+import {
+  clearPartials,
+  getPartials,
+  type PartialNotice,
+} from "../../sources/partials";
 import { COLOR, ICON } from "../theme";
 import {
   cleanText,
@@ -263,6 +268,15 @@ function QueueRow({ item }: { item: QueueItem }) {
 
 // ── Queue view ──────────────────────────────────────────────────────────
 
+/** One calm line summarizing any playlists a source returned cut short. */
+function partialNoticeText(partials: PartialNotice[]): string {
+  const p = partials[0]!;
+  const label = SOURCE_LABELS[p.source];
+  const lead = `${ICON.dot} ${label} gave ${p.got.toLocaleString()} of ${p.total.toLocaleString()} tracks for "${p.title}"`;
+  const more = partials.length - 1;
+  return more > 0 ? `${lead}  ${ICON.dot}  +${more} more cut short` : lead;
+}
+
 function QueueView() {
   const { queue, region, listRows } = useStore();
   const items = useQueueItems(queue);
@@ -295,9 +309,14 @@ function QueueView() {
   // At most one banner renders at a time (rate-limit wins), so both share
   // the same 2-row reservation.
   const banner = s.rateLimited || Boolean(s.failingSource);
+  // A cut-short note shares the banner's 2-row reservation: the rate-limit /
+  // failing-source banner wins when both could show, so the note only appears
+  // when no banner is up, and the row budget never needs a third slot.
+  const partials = getPartials();
+  const showPartials = !banner && partials.length > 0;
   const height = Math.max(
     1,
-    listRows - 2 - (banner ? 2 : 0) - (showCmds ? 2 : 0),
+    listRows - 2 - (banner || showPartials ? 2 : 0) - (showCmds ? 2 : 0),
   );
   const maxOffset = Math.max(0, sortedItems.length - height);
   const start = Math.min(offset, maxOffset);
@@ -380,6 +399,16 @@ function QueueView() {
         <Box marginBottom={1}>
           <Text color={COLOR.warn} wrap="truncate-end">
             {`${ICON.warn} ${s.failingSource} downloads keep failing  ${ICON.dot}  the downloader may be out of date  ${ICON.dot}  restart soundcli to update it`}
+          </Text>
+        </Box>
+      ) : null}
+
+      {showPartials ? (
+        // A source handed back fewer tracks than the playlist really holds
+        // (e.g. Spotify's very long lists): say so once, calmly, never silently.
+        <Box marginBottom={1}>
+          <Text dimColor wrap="truncate-end">
+            {partialNoticeText(partials)}
           </Text>
         </Box>
       ) : null}
@@ -926,6 +955,7 @@ export function Download() {
   async function enqueuePaste(source: SourceId, url: string): Promise<void> {
     setFiltering(false);
     setStep({ name: "loading", message: "Reading link…", source });
+    clearPartials();
     try {
       const tracks = await tracksFromUrl(source, url);
       if (tracks.length === 0) {
@@ -1052,6 +1082,7 @@ export function Download() {
     // would re-enqueue (and revive) the just-canceled queue. The queue hands us
     // an abort signal; cancelAll/clearAll trip it and we bail before enqueuing.
     const signal = queue.beginGather();
+    clearPartials();
     let gathered = 0;
     let addedAny = false;
     let firstError: string | undefined;
