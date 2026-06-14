@@ -18,7 +18,7 @@ import {
   clearSpotifyCache,
 } from "../src/sources/spotify/public";
 import { sanitizeName } from "../src/ytdlp/args";
-import { readFullPlaylist } from "../src/sources/spotify/full";
+import { readFullPlaylist, readPlaylistTotal } from "../src/sources/spotify/full";
 import { gidFromId } from "../src/sources/spotify/gid";
 import { clearPartials, getPartials } from "../src/sources/partials";
 
@@ -313,6 +313,65 @@ describe("makeSpotify adapter (album / track links + cache reuse)", () => {
     expect(playlists[0]?.url).toBe("spotify:track:TRACKID");
     const tracks = await adapter.listTracks(playlists[0]!);
     expect(tracks[0]?.title).toBe("Solo Song");
+  });
+
+  it("reports a playlist's true length in the picker, not the capped 100", async () => {
+    const embedIds = Array.from({ length: 100 }, (_, i) => `e${i}`);
+    fetchResilientMock.mockImplementation(async (url: string) => {
+      const tok = tokenResponse(url);
+      if (tok) return tok;
+      if (url.includes("/embed/playlist/")) {
+        return okResponse(
+          embedHtml(
+            "Big Mix",
+            embedIds.map((id) => ({ id, title: `Embed ${id}` })),
+          ),
+        );
+      }
+      if (url.includes("/playlist/v2/playlist/")) {
+        return jsonResponse({ length: 445, contents: { items: [] } });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    const adapter = makeSpotify("https://open.spotify.com/playlist/BIGID");
+    const lists = await adapter.listPlaylists();
+    expect(lists[0]).toMatchObject({
+      title: "Big Mix",
+      kind: "playlist",
+      count: 445,
+    });
+  });
+});
+
+describe("readPlaylistTotal (cheap true count, no metadata)", () => {
+  it("returns the embed count under the cap, with no token or spclient call", async () => {
+    const n = await readPlaylistTotal("SMALL", 30);
+    expect(n).toBe(30);
+    expect(fetchResilientMock).not.toHaveBeenCalled();
+  });
+
+  it("reads the true length from spclient when the embed is capped", async () => {
+    fetchResilientMock.mockImplementation(async (url: string) => {
+      const tok = tokenResponse(url);
+      if (tok) return tok;
+      if (url.includes("/playlist/v2/playlist/")) {
+        return jsonResponse({ length: 445, contents: { items: [] } });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    expect(await readPlaylistTotal("BIG", 100)).toBe(445);
+  });
+
+  it("degrades to the embed count when the spclient read fails", async () => {
+    fetchResilientMock.mockImplementation(async (url: string) => {
+      const tok = tokenResponse(url);
+      if (tok) return tok;
+      if (url.includes("/playlist/v2/playlist/")) {
+        return { ok: false, status: 500, json: async () => ({}) } as unknown as Response;
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    expect(await readPlaylistTotal("CAP", 100)).toBe(100);
   });
 });
 

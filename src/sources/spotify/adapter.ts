@@ -7,7 +7,7 @@ import {
   type SpotifyEntityType,
   type SpotifyPublicTrack,
 } from "./public";
-import { readFullPlaylist } from "./full";
+import { readFullPlaylist, readPlaylistTotal } from "./full";
 import { readPublicUserProfile } from "./user";
 
 /** Build the yt-dlp search target that finds this song on YouTube. */
@@ -102,13 +102,20 @@ export function makeSpotify(input?: string): SourceAdapter {
       const id = (ref as { id: string }).id;
       const entity = await readPublicEntity(ref.type, id);
       const kind = ref.type === "album" ? "album" : "playlist";
+      // Playlists can exceed the embed's 100-track cap, so the picker's count
+      // must be the true total (a cheap spclient length read), not the capped
+      // embed count. Albums and single tracks stay on the exact embed count.
+      const count =
+        ref.type === "playlist"
+          ? await readPlaylistTotal(id, entity.tracks.length)
+          : entity.tracks.length;
       return [
         {
           id: `spotify-${ref.type}-${id}`,
           title: entity.name,
           url: `spotify:${ref.type}:${id}`,
           kind,
-          count: entity.tracks.length,
+          count,
         },
       ];
     },
