@@ -387,9 +387,7 @@ function QueueView() {
             {`${ICON.warn} ${
               s.rateLimitReason === WAITING_FOR_TOOLS
                 ? "Waiting for the audio engine (check your internet)"
-                : s.rateLimitReason === "repeated errors"
-                  ? "Rate-limited"
-                  : `Rate-limited by ${s.rateLimitReason}`
+                : "Rate-limited, wait a while"
             }  ${ICON.dot}  ] resumes`}
           </Text>
         </Box>
