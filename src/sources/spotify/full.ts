@@ -186,3 +186,28 @@ export async function readFullPlaylist(
     return embed;
   }
 }
+
+/**
+ * A playlist's true track count, read cheaply for the picker preview: under the
+ * embed cap the embed already returned the whole list, so its count is exact;
+ * at the cap we ask spclient for the real length (one request, no per-track
+ * metadata). Any token/spclient failure degrades to the embed count, so it
+ * never blocks and never claims more than we could see.
+ *
+ * @param id - The Spotify playlist id.
+ * @param embedCount - How many tracks the embed returned (its capped count).
+ * @returns The true total when we can read it, else the embed count.
+ */
+export async function readPlaylistTotal(
+  id: string,
+  embedCount: number,
+): Promise<number> {
+  if (embedCount < EMBED_CAP) return embedCount;
+  try {
+    const { accessToken, clientId } = await getWebPlayerToken();
+    const { total } = await fetchAllUris(id, spHeaders(accessToken, clientId));
+    return Math.max(total, embedCount);
+  } catch {
+    return embedCount;
+  }
+}
