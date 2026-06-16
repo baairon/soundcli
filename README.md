@@ -70,3 +70,14 @@ If you want to run or develop soundcli locally:
 
 soundcli runs on your computer and nowhere else. There are no accounts, no logins, and nothing tracking what you play. It connects to the internet for three reasons only: to download the music you ask for, to set itself up the first time, and to keep its own tools current so downloads keep working. Everything else stays with you.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=baairon%2Fsoundcli&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&legend=top-left" />
+ </picture>
+</a>
+
+
