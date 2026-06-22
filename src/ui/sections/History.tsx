@@ -30,6 +30,7 @@ export function History() {
     region,
     setSection,
     setCaptureMode,
+    compact,
   } = useStore();
   const histVersion = useHistory(history);
   const libVersion = useLibrary(library);
@@ -161,36 +162,42 @@ export function History() {
   }
 
   const subtitle = `${visible.length} song${visible.length === 1 ? "" : "s"}`;
-  // Rows above the list beyond the header: tabs (1) + search line + margin (2).
-  const reserveRows = 3;
+  // The search/hint row carries content only while typing, confirming a
+  // delete, or showing an active query; when compact and idle, drop it.
+  const showSearchRow = !compact || editing || confirm !== null || searching;
+  // Rows above the list beyond the header: tabs (1) + the search row when shown
+  // (2 normally, 1 compact since its margin goes too).
+  const reserveRows = 1 + (showSearchRow ? (compact ? 1 : 2) : 0);
 
   return (
     <Box flexDirection="column">
       <Header title="Recently played" subtitle={subtitle} focused={focused} />
       <SourceTabs tabs={tabs} active={filter} count={tabCount} />
       {/* The search row doubles as the delete confirm: same single row, so
-          the list's height budget never moves. */}
-      <Box marginBottom={1}>
-        {confirm ? (
-          <Text color={COLOR.warn} wrap="truncate-end">
-            {`Delete '${cleanText(confirm.title)}'?  y Delete  ${ICON.dot}  esc Keep`}
-          </Text>
-        ) : (
-          <>
-            <Text dimColor>{`${ICON.pointer} `}</Text>
-            {focused && editing ? (
-              <TextField
-                defaultValue={q}
-                placeholder="Search by name…"
-                onChange={setQ}
-                onSubmit={() => setEditing(false)}
-              />
-            ) : (
-              <Text dimColor>{q || "Press / to search"}</Text>
-            )}
-          </>
-        )}
-      </Box>
+          the list's height budget never moves. Hidden when compact + idle. */}
+      {showSearchRow ? (
+        <Box marginBottom={compact ? 0 : 1}>
+          {confirm ? (
+            <Text color={COLOR.warn} wrap="truncate-end">
+              {`Delete '${cleanText(confirm.title)}'?  y Delete  ${ICON.dot}  esc Keep`}
+            </Text>
+          ) : (
+            <>
+              <Text dimColor>{`${ICON.pointer} `}</Text>
+              {focused && editing ? (
+                <TextField
+                  defaultValue={q}
+                  placeholder="Search by name…"
+                  onChange={setQ}
+                  onSubmit={() => setEditing(false)}
+                />
+              ) : (
+                <Text dimColor>{q || "Press / to search"}</Text>
+              )}
+            </>
+          )}
+        </Box>
+      ) : null}
       {searching && visible.length === 0 ? (
         <Text dimColor>No matches.</Text>
       ) : (

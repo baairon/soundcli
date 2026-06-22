@@ -65,6 +65,8 @@ export interface Store {
   mpvStatus: string | null;
   /** How many rows a scrolling list may use, so the layout fits the terminal. */
   listRows: number;
+  /** Short-terminal mode: strip the wordmark + spacers so song rows win. */
+  compact: boolean;
   /** How many columns the content pane has, for truncating long titles. */
   contentWidth: number;
   /** Full terminal width, for components that span it (now-playing bar). */

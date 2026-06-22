@@ -170,6 +170,7 @@ export function makeStore(overrides: Partial<Store> = {}): Store {
     setPendingAdd: () => {},
     mpvStatus: null,
     listRows: 14,
+    compact: false,
     contentWidth: 52,
     cols: 80,
     rows: 24,
