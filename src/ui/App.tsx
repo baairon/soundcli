@@ -103,28 +103,6 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   }, [stdout]);
   const rows = size.rows;
   const cols = size.cols;
-  // Fit the whole layout inside the terminal so content never gets clipped.
-  // On very short terminals we shed the hints line, then the rules, to keep
-  // the sidebar + content + now-playing bar all visible.
-  const showTopRule = rows >= 12;
-  const showDivider = rows >= 12;
-  const showFooter = rows >= 14;
-  // The block wordmark needs a couple of rows and some width; on a cramped
-  // terminal we fall back to a one-line text mark so nothing gets squeezed.
-  const showLogo = rows >= 16 && cols >= 34;
-  const brandHeight = showLogo ? LOGO_LINES.length : 1;
-  const chrome =
-    brandHeight +
-    (showTopRule ? 1 : 0) +
-    1 + // body's marginTop
-    (showDivider ? 1 : 0) +
-    1 + // now-playing bar
-    (showFooter ? 1 : 0);
-  const bodyH = Math.max(6, rows - 1 - chrome);
-  const listRows = Math.max(3, Math.min(30, bodyH - 2));
-  // Root padding (2) + sidebar (20) + its margin (1) + the content rail (1)
-  // + its padding (2), with 2 columns of slack.
-  const contentWidth = Math.max(20, cols - 28);
 
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("Getting your music ready…");
@@ -143,6 +121,37 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     },
     [],
   );
+
+  // Fit the whole layout inside the terminal so content never gets clipped.
+  // Below ~20 rows we go "compact": shed the wordmark, the top rule, and the
+  // body's top margin (and sections drop their idle search hint) so every
+  // freed row goes to the song list. The body/now-playing divider and the
+  // footer stay until even shorter terminals force them out.
+  const compact = rows < 20;
+  const showTopRule = !compact;
+  const showDivider = rows >= 12;
+  const showFooter = rows >= 14;
+  // The block wordmark only shows when there's room to spare (not compact) and
+  // the terminal is wide enough. Otherwise render no brand at all (no text
+  // fallback), reserving a row only for the transient mpv line when present.
+  const showLogo = !compact && cols >= 34;
+  const brandHeight = showLogo ? LOGO_LINES.length : mpvStatus ? 1 : 0;
+  const chrome =
+    brandHeight +
+    (showTopRule ? 1 : 0) +
+    (compact ? 0 : 1) + // body's marginTop
+    (showDivider ? 1 : 0) +
+    1 + // now-playing bar
+    (showFooter ? 1 : 0);
+  const bodyH = Math.max(6, rows - 1 - chrome);
+  // Let the list fill the body: it's a fixed-height box and SongList already
+  // windows its rows, so the only bound we need is the body height itself
+  // (minus the standard header + a slack row). No fixed cap, which used to
+  // strand dead space below the list on tall terminals.
+  const listRows = Math.max(3, bodyH - 2);
+  // Root padding (2) + sidebar (20) + its margin (1) + the content rail (1)
+  // + its padding (2), with 2 columns of slack.
+  const contentWidth = Math.max(20, cols - 28);
 
   const [section, setSection] = useState<Section>("library");
   // Launch with the sidebar menu focused so the first thing you meet is the
@@ -472,6 +481,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       setPendingAdd,
       mpvStatus,
       listRows,
+      compact,
       contentWidth,
       cols,
       rows,
@@ -489,6 +499,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     pendingAdd,
     mpvStatus,
     listRows,
+    compact,
     contentWidth,
     cols,
     rows,
@@ -519,13 +530,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   if (!store) {
     return (
       <Box flexDirection="column" paddingX={1} paddingY={1}>
-        {showLogo ? (
-          <Logo />
-        ) : (
-          <Text bold color={COLOR.accent}>
-            soundcli
-          </Text>
-        )}
+        {showLogo ? <Logo /> : null}
         <Box marginTop={1}>
           <Spinner label={status} />
         </Box>
@@ -539,13 +544,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     <StoreContext.Provider value={store}>
       <Box flexDirection="column" paddingX={1}>
         <Box justifyContent="space-between">
-          {showLogo ? (
-            <Logo />
-          ) : (
-            <Text bold color={COLOR.accent}>
-              soundcli
-            </Text>
-          )}
+          {showLogo ? <Logo /> : null}
           {mpvStatus ? <Text dimColor>{mpvStatus}</Text> : null}
         </Box>
         {showTopRule ? <Rule width={ruleWidth} /> : null}
@@ -567,7 +566,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
             ) : null}
             <Box
               height={bodyH}
-              marginTop={1}
+              marginTop={compact ? 0 : 1}
               display={showHelp ? "none" : "flex"}
             >
               <Sidebar />

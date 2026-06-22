@@ -46,6 +46,7 @@ export function Playlists() {
     setPlaylistsDepth,
     queue,
     playback,
+    compact,
   } = useStore();
   useQueueItems(queue);
   const libVersion = useLibrary(library);
@@ -274,7 +275,7 @@ export function Playlists() {
       <Box flexDirection="column">
         <Header title={setLabel(active)} subtitle={subtitle} focused={focused} />
         {confirm ? (
-          <Box marginBottom={1} flexShrink={0}>
+          <Box marginBottom={compact ? 0 : 1} flexShrink={0}>
             <Text color={COLOR.warn} wrap="truncate-end">
               {confirmText()}
             </Text>
@@ -345,36 +346,44 @@ export function Playlists() {
   }
 
   const subtitle = `${visibleSets.length} playlist${visibleSets.length === 1 ? "" : "s"}`;
+  // The filter/hint row carries content only while typing, confirming a
+  // delete, or showing an active query; when compact and idle, drop it.
+  const showSearchRow = !compact || filtering || confirm !== null || searching;
+  // Rows above the list beyond the header: tabs (1) + the filter row when shown
+  // (2 normally, 1 compact since its margin goes too).
+  const reserveRows = 1 + (showSearchRow ? (compact ? 1 : 2) : 0);
 
   return (
     <Box flexDirection="column">
       <Header title="Playlists" subtitle={subtitle} focused={focused} />
       <SourceTabs tabs={tabs} active={filter} count={tabCount} />
-      <Box marginBottom={1} flexShrink={0}>
-        {confirm ? (
-          <Text color={COLOR.warn} wrap="truncate-end">
-            {confirmText()}
-          </Text>
-        ) : (
-          <>
-            <Text dimColor>{`${ICON.pointer} `}</Text>
-            {focused && filtering ? (
-              <TextField
-                defaultValue={q}
-                placeholder="Search playlists…"
-                onChange={setQ}
-                onSubmit={() => setFiltering(false)}
-              />
-            ) : (
-              <Box flexGrow={1} minWidth={0}>
-                <Text dimColor wrap="truncate-end">
-                  {q || "Press / to search"}
-                </Text>
-              </Box>
-            )}
-          </>
-        )}
-      </Box>
+      {showSearchRow ? (
+        <Box marginBottom={compact ? 0 : 1} flexShrink={0}>
+          {confirm ? (
+            <Text color={COLOR.warn} wrap="truncate-end">
+              {confirmText()}
+            </Text>
+          ) : (
+            <>
+              <Text dimColor>{`${ICON.pointer} `}</Text>
+              {focused && filtering ? (
+                <TextField
+                  defaultValue={q}
+                  placeholder="Search playlists…"
+                  onChange={setQ}
+                  onSubmit={() => setFiltering(false)}
+                />
+              ) : (
+                <Box flexGrow={1} minWidth={0}>
+                  <Text dimColor wrap="truncate-end">
+                    {q || "Press / to search"}
+                  </Text>
+                </Box>
+              )}
+            </>
+          )}
+        </Box>
+      ) : null}
       {visibleSets.length === 0 ? (
         <Text dimColor>No matches.</Text>
       ) : (
@@ -382,7 +391,7 @@ export function Playlists() {
           key="sets"
           groups={groups}
           focused={focused && !confirm && !filtering}
-          reserveRows={3}
+          reserveRows={reserveRows}
           onDelete={(value) => {
             const s = sets.find((x) => x.key === value);
             if (s)

@@ -46,6 +46,7 @@ function makeStore(overrides?: Partial<Store>): Store {
     setPendingAdd: () => {},
     mpvStatus: null,
     listRows: 10,
+    compact: false,
     contentWidth: 48,
     cols: 80,
     rows: 24,
@@ -72,6 +73,21 @@ describe("single-page sections render", () => {
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Library");
     expect(frame).toContain("Nothing here yet");
+  });
+
+  it("library drops the idle search hint when compact, keeps it otherwise", () => {
+    const full = render(
+      wrap(<LibrarySection />, makeStore({ library: makeFakeLibrary() })),
+    );
+    expect(full.lastFrame() ?? "").toContain("Press / to search");
+
+    const tight = render(
+      wrap(
+        <LibrarySection />,
+        makeStore({ library: makeFakeLibrary(), compact: true }),
+      ),
+    );
+    expect(tight.lastFrame() ?? "").not.toContain("Press / to search");
   });
 
   it("download shows the source picker when nothing is queued", () => {
