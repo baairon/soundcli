@@ -2,7 +2,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execa } from "execa";
 import { binDir } from "../config/paths";
-import { fetchResilient } from "../util/net";
+import { findOnPath } from "../util/exec";
+import { fetchResilient, USER_AGENT, type FetchImpl } from "../util/net";
 
 const RELEASE_BASE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
 
@@ -37,10 +38,16 @@ export function stagedYtDlpPath(): string {
  * renames, so a crash mid-download can never leave a torn exe that later
  * looks installed.
  */
-export async function downloadYtDlp(dest: string): Promise<void> {
+export async function downloadYtDlp(
+  dest: string,
+  fetchImpl: FetchImpl = fetch as FetchImpl,
+): Promise<void> {
   await fs.mkdir(binDir, { recursive: true });
   const url = `${RELEASE_BASE}/${assetName()}`;
-  const res = await fetchResilient(url);
+  const res = await fetchResilient(url, {
+    fetchImpl,
+    headers: { "User-Agent": USER_AGENT },
+  });
   if (!res.ok) {
     throw new Error(
       `Failed to download yt-dlp from ${url}: ${res.status} ${res.statusText}`,
@@ -103,6 +110,19 @@ async function probeBinary(dest: string): Promise<boolean> {
 }
 
 /**
+ * A usable yt-dlp already on the user's PATH, or null. The rescue when our own
+ * download is blocked (some networks 403 GitHub release assets). Seams injected
+ * for tests.
+ */
+export async function detectSystemYtDlp(
+  find: (name: string) => Promise<string | null> = findOnPath,
+  probe: (p: string) => Promise<boolean> = probeBinary,
+): Promise<string | null> {
+  const found = await find("yt-dlp");
+  return found && (await probe(found)) ? found : null;
+}
+
+/**
  * Download to `dest`, then check the binary actually runs. A failed probe
  * means a torn or antivirus-mangled exe: delete it and retry once before
  * giving up, so a bad first download can't masquerade as installed forever.
@@ -128,12 +148,74 @@ export async function downloadVerified(
   );
 }
 
+/**
+ * Decide which yt-dlp to use: the bundled binary if present, else download our
+ * own exactly as before, and only if that download is blocked, fall back to a
+ * system yt-dlp on PATH. The download path is untouched for everyone whose
+ * fetch works; detection runs only when it fails. Seam-injected and free of
+ * module state, so the ordering is unit-testable.
+ */
+export async function resolveYtDlp(
+  onStatus?: (msg: string) => void,
+  deps: {
+    dest?: string;
+    exists?: (p: string) => Promise<boolean>;
+    detect?: () => Promise<string | null>;
+    download?: (dest: string) => Promise<void>;
+  } = {},
+): Promise<string> {
+  const dest = deps.dest ?? ytDlpPath();
+  const exists =
+    deps.exists ??
+    (async (p: string) => {
+      try {
+        await fs.access(p);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  const detect = deps.detect ?? (() => detectSystemYtDlp());
+  const download = deps.download ?? downloadVerified;
+
+  // Already installed: the normal path, completely unchanged.
+  if (await exists(dest)) return dest;
+
+  // First run: fetch our own binary, exactly as before.
+  try {
+    onStatus?.("downloading yt-dlp (one-time setup)…");
+    await download(dest);
+    onStatus?.("yt-dlp ready.");
+    return dest;
+  } catch (e) {
+    // The download is blocked on some networks (GitHub 403 on mobile/CGNAT/
+    // datacenter/Termux). A working system yt-dlp is the backup; with none,
+    // surface the real download failure.
+    const system = await detect();
+    if (system) {
+      onStatus?.("using yt-dlp from your system");
+      return system;
+    }
+    throw e;
+  }
+}
+
 let inflight: Promise<string> | null = null;
+let resolvedYtDlp: string | null = null;
 
 /**
- * Ensure yt-dlp is present, downloading it on first run. Returns its path.
- * Concurrent callers share one run, so the binary never downloads twice in
- * parallel; a failed run clears, so the next call retries fresh.
+ * The yt-dlp we actually spawn (enumeration + downloads): the bundled binary,
+ * or a detected system one when the bundled download was blocked. Falls back to
+ * the bundled-path math until the first ensure resolves it.
+ */
+export function resolvedYtDlpPath(): string {
+  return resolvedYtDlp ?? ytDlpPath();
+}
+
+/**
+ * Ensure a usable yt-dlp, downloading on first run only when neither a bundled
+ * nor a system binary is available. Returns the resolved path. Concurrent
+ * callers share one run; a failed run clears, so the next call retries fresh.
  */
 export function ensureYtDlp(onStatus?: (msg: string) => void): Promise<string> {
   inflight ??= doEnsure(onStatus).finally(() => {
@@ -143,18 +225,9 @@ export function ensureYtDlp(onStatus?: (msg: string) => void): Promise<string> {
 }
 
 async function doEnsure(onStatus?: (msg: string) => void): Promise<string> {
-  const dest = ytDlpPath();
+  if (resolvedYtDlp) return resolvedYtDlp;
   // A staged update (from the daily check) applies before first use.
   await finalizeStagedYtDlp().catch(() => false);
-  try {
-    await fs.access(dest);
-    return dest;
-  } catch {
-    // not present yet
-  }
-
-  onStatus?.("downloading yt-dlp (one-time setup)…");
-  await downloadVerified(dest);
-  onStatus?.("yt-dlp ready.");
-  return dest;
+  resolvedYtDlp = await resolveYtDlp(onStatus);
+  return resolvedYtDlp;
 }

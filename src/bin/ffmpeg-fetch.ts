@@ -6,7 +6,8 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import zlib from "node:zlib";
 import { execa } from "execa";
 import { binDir } from "../config/paths";
-import { fetchResilient, type FetchImpl } from "../util/net";
+import { findOnPath } from "../util/exec";
+import { fetchResilient, USER_AGENT, type FetchImpl } from "../util/net";
 
 // ffmpeg + ffprobe, fetched on first need from the same static builds the
 // ffmpeg-static npm package pins (eugeneware/ffmpeg-static), so installs stay
@@ -115,7 +116,10 @@ export async function downloadFfTool(
 ): Promise<void> {
   await fs.mkdir(path.dirname(dest), { recursive: true });
   const url = ffDownloadUrl(tool);
-  const res = await fetchResilient(url, { fetchImpl });
+  const res = await fetchResilient(url, {
+    fetchImpl,
+    headers: { "User-Agent": USER_AGENT },
+  });
   if (!res.ok || !res.body) {
     throw new Error(
       `Failed to download ${tool} from ${url}: ${res.status} ${res.statusText}`,
@@ -144,6 +148,79 @@ export type ExecImpl = (
 
 const realExec: ExecImpl = (file, args, opts) => execa(file, args, opts);
 
+/** Whether the binary at `file` runs (prints its version). */
+async function ffToolRuns(
+  file: string,
+  execImpl: ExecImpl = realExec,
+): Promise<boolean> {
+  try {
+    await execImpl(file, ["-version"], { timeout: 10_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let resolvedFfmpeg: string | null = null;
+let resolvedFfprobe: string | null = null;
+
+/**
+ * The ffmpeg / ffprobe we actually use: the bundled pair, or a detected system
+ * pair when the bundled download was blocked. Fall back to the bundled-path
+ * math until the first ensure resolves them.
+ */
+export function resolvedFfmpegPath(): string {
+  return resolvedFfmpeg ?? ffmpegBinPath();
+}
+export function resolvedFfprobePath(): string {
+  return resolvedFfprobe ?? ffprobeBinPath();
+}
+
+/**
+ * A usable system ffmpeg + ffprobe pair on PATH, or null. Both are required:
+ * they ship and are used together. The rescue when our own download is blocked
+ * (some networks 403 GitHub release assets). Seams injected for tests.
+ */
+export async function detectSystemFf(
+  find: (name: string) => Promise<string | null> = findOnPath,
+  probe: (p: string) => Promise<boolean> = ffToolRuns,
+): Promise<{ ffmpeg: string; ffprobe: string } | null> {
+  const ffmpeg = await find("ffmpeg");
+  const ffprobe = await find("ffprobe");
+  if (ffmpeg && ffprobe && (await probe(ffmpeg)) && (await probe(ffprobe))) {
+    return { ffmpeg, ffprobe };
+  }
+  return null;
+}
+
+/**
+ * When a (re)fetch is due, download our own pair exactly as before, and only if
+ * that download is blocked, fall back to a system pair. The download path is
+ * untouched for everyone whose fetch works; detection runs only when it fails.
+ * Seam-injected and free of module state, so the ordering is unit-testable.
+ */
+export async function resolveFfFetch(
+  onStatus: ((msg: string) => void) | undefined,
+  download: () => Promise<void>,
+  detect: () => Promise<{ ffmpeg: string; ffprobe: string } | null>,
+): Promise<{ ffmpeg: string; ffprobe: string }> {
+  // Fetch our own pair, exactly as before.
+  try {
+    await download();
+    return { ffmpeg: ffmpegBinPath(), ffprobe: ffprobeBinPath() };
+  } catch (e) {
+    // Blocked on some networks (GitHub 403 on mobile/CGNAT/datacenter/Termux).
+    // Fall back to a system pair if the user has one; otherwise surface the
+    // real failure.
+    const system = await detect();
+    if (system) {
+      onStatus?.("using ffmpeg from your system");
+      return system;
+    }
+    throw e;
+  }
+}
+
 /**
  * One health probe per process: enough to catch a torn or antivirus-mangled
  * binary without paying a spawn on every ensure call.
@@ -151,12 +228,7 @@ const realExec: ExecImpl = (file, args, opts) => execa(file, args, opts);
 let probed = false;
 
 async function probeOk(execImpl: ExecImpl): Promise<boolean> {
-  try {
-    await execImpl(ffmpegBinPath(), ["-version"], { timeout: 10_000 });
-    return true;
-  } catch {
-    return false;
-  }
+  return ffToolRuns(resolvedFfmpegPath(), execImpl);
 }
 
 async function downloadBoth(
@@ -181,19 +253,35 @@ async function doEnsure(
   onStatus?: (msg: string) => void,
   fetchImpl: FetchImpl = fetch as FetchImpl,
   execImpl: ExecImpl = realExec,
+  detect: () => Promise<{ ffmpeg: string; ffprobe: string } | null> = () =>
+    detectSystemFf(findOnPath, (p) => ffToolRuns(p, execImpl)),
 ): Promise<void> {
+  // Resolved already this process (bundled verified or system found): the
+  // per-download queue gate can return without re-probing.
+  if (resolvedFfmpeg && resolvedFfprobe) return;
   await fs.mkdir(binDir, { recursive: true });
   const haveFfmpeg = await present(ffmpegBinPath());
   const haveFfprobe = await present(ffprobeBinPath());
   if (needsFfFetch(haveFfmpeg, haveFfprobe, await readStampTag())) {
-    await downloadBoth(onStatus, fetchImpl);
+    const pair = await resolveFfFetch(
+      onStatus,
+      () => downloadBoth(onStatus, fetchImpl),
+      detect,
+    );
+    resolvedFfmpeg = pair.ffmpeg;
+    resolvedFfprobe = pair.ffprobe;
     return;
   }
+  // Bundled pair present and stamped: adopt it, then health-probe once.
+  resolvedFfmpeg = ffmpegBinPath();
+  resolvedFfprobe = ffprobeBinPath();
   if (probed) return;
   probed = true;
   if (await probeOk(execImpl)) return;
   // On disk but can't even print its version: a torn write or an antivirus
   // quarantine. Wipe the pair, fetch fresh, and check the replacement runs.
+  resolvedFfmpeg = null;
+  resolvedFfprobe = null;
   await removePair();
   await downloadBoth(onStatus, fetchImpl);
   if (!(await probeOk(execImpl))) {
@@ -204,6 +292,8 @@ async function doEnsure(
       "The audio engine isn't starting on this computer. Check that your antivirus isn't blocking soundcli, then try again.",
     );
   }
+  resolvedFfmpeg = ffmpegBinPath();
+  resolvedFfprobe = ffprobeBinPath();
 }
 
 let inflight: Promise<void> | null = null;

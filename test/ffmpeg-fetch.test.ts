@@ -5,12 +5,18 @@ import path from "node:path";
 import zlib from "node:zlib";
 import {
   FFBIN_TAG,
+  detectSystemFf,
   downloadFfTool,
   ffAssetName,
   ffDownloadUrl,
+  ffmpegBinPath,
+  ffprobeBinPath,
   needsFfFetch,
+  resolveFfFetch,
+  resolvedFfmpegPath,
+  resolvedFfprobePath,
 } from "../src/bin/ffmpeg-fetch";
-import type { FetchImpl } from "../src/util/net";
+import { USER_AGENT, type FetchImpl } from "../src/util/net";
 
 describe("ffAssetName", () => {
   it("maps windows to the x64 asset on every arch (arm64 emulates it)", () => {
@@ -100,5 +106,107 @@ describe("downloadFfTool", () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("sends a User-Agent on the GitHub fetch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-ff-"));
+    const dest = path.join(dir, "ffmpeg-ua.bin");
+    let seenUA: unknown;
+    const impl: FetchImpl = async (_url, init) => {
+      seenUA = (init?.headers as Record<string, string> | undefined)?.[
+        "User-Agent"
+      ];
+      return new Response(new Uint8Array(zlib.gzipSync(Buffer.from("x"))));
+    };
+    try {
+      await downloadFfTool("ffmpeg", dest, impl);
+      expect(seenUA).toBe(USER_AGENT);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("detectSystemFf", () => {
+  const runs = async (): Promise<boolean> => true;
+
+  it("returns the pair when both are found and runnable", async () => {
+    const find = async (name: string) =>
+      name === "ffmpeg" ? "/usr/bin/ffmpeg" : "/usr/bin/ffprobe";
+    expect(await detectSystemFf(find, runs)).toEqual({
+      ffmpeg: "/usr/bin/ffmpeg",
+      ffprobe: "/usr/bin/ffprobe",
+    });
+  });
+
+  it("returns null when either tool is missing", async () => {
+    const find = async (name: string) =>
+      name === "ffmpeg" ? "/usr/bin/ffmpeg" : null;
+    expect(await detectSystemFf(find, runs)).toBeNull();
+  });
+
+  it("returns null when a found tool will not run", async () => {
+    const find = async (name: string) =>
+      name === "ffmpeg" ? "/usr/bin/ffmpeg" : "/usr/bin/ffprobe";
+    const probe = async (p: string): Promise<boolean> => p.endsWith("ffmpeg");
+    expect(await detectSystemFf(find, probe)).toBeNull();
+  });
+});
+
+describe("resolveFfFetch", () => {
+  it("downloads our own pair and never detects when it works", async () => {
+    let downloaded = false;
+    let detected = false;
+    const pair = await resolveFfFetch(
+      undefined,
+      async () => {
+        downloaded = true;
+      },
+      async () => {
+        detected = true;
+        return { ffmpeg: "/usr/bin/ffmpeg", ffprobe: "/usr/bin/ffprobe" };
+      },
+    );
+    expect(downloaded).toBe(true);
+    expect(detected).toBe(false);
+    expect(pair).toEqual({
+      ffmpeg: ffmpegBinPath(),
+      ffprobe: ffprobeBinPath(),
+    });
+  });
+
+  it("falls back to a system pair only when the download is blocked", async () => {
+    const msgs: string[] = [];
+    const pair = await resolveFfFetch(
+      (m) => msgs.push(m),
+      async () => {
+        throw new Error("403 Forbidden");
+      },
+      async () => ({ ffmpeg: "/usr/bin/ffmpeg", ffprobe: "/usr/bin/ffprobe" }),
+    );
+    expect(pair).toEqual({
+      ffmpeg: "/usr/bin/ffmpeg",
+      ffprobe: "/usr/bin/ffprobe",
+    });
+    expect(msgs.some((m) => /system/i.test(m))).toBe(true);
+  });
+
+  it("surfaces the real download error when blocked and no system pair exists", async () => {
+    await expect(
+      resolveFfFetch(
+        undefined,
+        async () => {
+          throw new Error("403 Forbidden");
+        },
+        async () => null,
+      ),
+    ).rejects.toThrow(/403/);
+  });
+});
+
+describe("resolved ff paths", () => {
+  it("default to the bundled location before any resolution", () => {
+    expect(resolvedFfmpegPath()).toBe(ffmpegBinPath());
+    expect(resolvedFfprobePath()).toBe(ffprobeBinPath());
   });
 });

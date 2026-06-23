@@ -1,7 +1,7 @@
 import readline from "node:readline";
 import { execa } from "execa";
 import { ffmpegPath, jsRuntimeArgs, toolEnv } from "../bin/binaries";
-import { ytDlpPath } from "../bin/ytdlp-fetch";
+import { resolvedYtDlpPath } from "../bin/ytdlp-fetch";
 import type { Config } from "../config/config";
 import {
   audioFormatArgs,
@@ -111,7 +111,7 @@ export async function enumerate(
 
   let stdout: string;
   try {
-    ({ stdout } = await execa(ytDlpPath(), args, { env: toolEnv() }));
+    ({ stdout } = await execa(resolvedYtDlpPath(), args, { env: toolEnv() }));
   } catch (e) {
     // Surface yt-dlp's own "ERROR: ..." line instead of the raw execa dump.
     const err = e as { stderr?: string };
@@ -225,7 +225,7 @@ export async function downloadTrack(
     url,
   ];
 
-  const subprocess = execa(ytDlpPath(), args, {
+  const subprocess = execa(resolvedYtDlpPath(), args, {
     env: toolEnv(),
     buffer: false,
     reject: false,

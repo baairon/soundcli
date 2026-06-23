@@ -10,6 +10,14 @@
 /** HTTP statuses worth retrying. Mirrors urllib3's status_forcelist plus 408/425. */
 export const RETRY_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
+/**
+ * User-Agent for our own outbound requests. GitHub serves release assets to a
+ * UA-less client with 403 on some IP ranges (mobile/CGNAT, datacenter, Termux),
+ * so every GitHub fetch must send one. Mirrors the convention the Spotify calls
+ * already follow.
+ */
+export const USER_AGENT = "soundcli (+https://www.npmjs.com/package/sndcli)";
+
 /** Minimal fetch signature we depend on, so tests can inject a fake. */
 export type FetchImpl = (
   url: string,

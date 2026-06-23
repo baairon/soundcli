@@ -386,7 +386,7 @@ function QueueView() {
           <Text color={COLOR.warn} wrap="truncate-end">
             {`${ICON.warn} ${
               s.rateLimitReason === WAITING_FOR_TOOLS
-                ? "Waiting for the audio engine (check your internet)"
+                ? "Waiting for the audio engine (install ffmpeg if this persists)"
                 : "Rate-limited, wait a while"
             }  ${ICON.dot}  ] resumes`}
           </Text>
