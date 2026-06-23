@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { execa } from "execa";
 import { ensureYtDlp } from "./ytdlp-fetch";
-import { ensureFfmpeg, ffmpegBinPath, ffprobeBinPath } from "./ffmpeg-fetch";
+import {
+  ensureFfmpeg,
+  resolvedFfmpegPath,
+  resolvedFfprobePath,
+} from "./ffmpeg-fetch";
 import { withToolsOnPath } from "../util/exec";
 import { binDir } from "../config/paths";
 
@@ -15,14 +19,14 @@ export interface Binaries {
   mpv: string | null;
 }
 
-/** Where ffmpeg lives once fetched (pure path math; the fetch may still be in flight). */
+/** Where ffmpeg lives: the bundled binary, or a detected system one. */
 export function ffmpegPath(): string {
-  return ffmpegBinPath();
+  return resolvedFfmpegPath();
 }
 
-/** Where ffprobe lives once fetched (pure path math; the fetch may still be in flight). */
+/** Where ffprobe lives: the bundled binary, or a detected system one. */
 export function ffprobePath(): string {
-  return ffprobeBinPath();
+  return resolvedFfprobePath();
 }
 
 /**
@@ -233,8 +237,8 @@ export async function ensureBinaries(
   void ensureFfmpeg(onStatus).catch(() => {});
   const mpv = await resolveMpv();
   return {
-    ffmpeg: ffmpegBinPath(),
-    ffprobe: ffprobeBinPath(),
+    ffmpeg: resolvedFfmpegPath(),
+    ffprobe: resolvedFfprobePath(),
     ytDlp,
     mpv,
   };

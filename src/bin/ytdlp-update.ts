@@ -12,7 +12,7 @@ import { execa } from "execa";
 import { toolEnv } from "./binaries";
 import { downloadYtDlp, stagedYtDlpPath, ytDlpPath } from "./ytdlp-fetch";
 import { binDir } from "../config/paths";
-import type { FetchImpl } from "../util/net";
+import { USER_AGENT, type FetchImpl } from "../util/net";
 
 /** Following this redirect reveals the latest tag (no GitHub API quota). */
 export const LATEST_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest";
@@ -95,6 +95,7 @@ export async function fetchLatestVersion(
   try {
     const res = await fetchImpl(LATEST_URL, {
       redirect: "manual",
+      headers: { "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(10_000),
     });
     return parseLatestFromLocation(res.headers.get("location"));
@@ -124,6 +125,14 @@ export async function localYtDlpVersion(): Promise<string | null> {
 export async function maybeUpdateYtDlp(
   fetchImpl: FetchImpl = fetch as FetchImpl,
 ): Promise<boolean> {
+  // Only the bundled binary is ours to update. When we're running on a system
+  // yt-dlp (no bundled file present), skip the check so it can't re-trigger the
+  // blocked download in the background.
+  try {
+    await fs.access(ytDlpPath());
+  } catch {
+    return false;
+  }
   const stamp = await readStamp();
   if (!shouldCheck(stamp)) return false;
 

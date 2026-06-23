@@ -512,7 +512,8 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     return (
       <Box flexDirection="column" paddingX={1} paddingY={1}>
         <Text color={COLOR.warn}>
-          Couldn&apos;t finish setup, check your internet
+          Couldn&apos;t set up the audio tools. Check your connection, or
+          install yt-dlp and ffmpeg with your package manager.
         </Text>
         <Box marginTop={1}>
           <Text wrap="truncate-end">
