@@ -293,10 +293,10 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
 
   // Keep the library in step with disk without a restart: re-link files the
   // user moved or reorganized inside the library folder, prune real deletions,
-  // and dedupe. Runs when landing on a library-backed section and on a quiet
-  // background interval, guarded so runs never stack and coalesced so rapid
-  // tab-hops don't restat. Cheap when nothing drifted: the folder rescan only
-  // happens when a track's file actually goes missing.
+  // and dedupe. Runs when landing on a library-backed section, guarded so runs
+  // never stack and coalesced so rapid tab-hops don't restat. Cheap when nothing
+  // drifted: the folder rescan only happens when a track's file actually goes
+  // missing.
   const reconciling = useRef(false);
   const lastReconcile = useRef(0);
   const runReconcile = useCallback(() => {
@@ -308,8 +308,8 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     // (one access per track, not two), while each run still sees current disk.
     void reconcileLibrary(library, new Map<string, boolean>(), config?.libraryDir)
       .then((r) => {
-        // Only touch recently-played when a prune actually removed tracks, so an
-        // idle interval reconcile writes nothing.
+        // Only touch recently-played when a prune actually removed tracks, so a
+        // reconcile that changed nothing writes nothing.
         if (r.prunedMissing > 0) boot.history.retain((id) => library.has(id));
       })
       .finally(() => {
@@ -327,11 +327,6 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       runReconcile();
     }
   }, [section, runReconcile]);
-
-  useEffect(() => {
-    const id = setInterval(runReconcile, 15_000);
-    return () => clearInterval(id);
-  }, [runReconcile]);
 
   const quitAll = useCallback(() => {
     boot?.queue.suspend();
