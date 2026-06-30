@@ -193,14 +193,12 @@ export function SongList({
         const here = r.idx === clamped && focused;
         const value = r.kind === "action" ? r.value : r.item.value;
         const playing = playingId !== undefined && value === playingId;
-        const label =
-          r.kind === "action"
-            ? r.label
-            : r.item.artist
-              ? `${cleanText(r.item.title)}  ${ICON.dot}  ${cleanText(r.item.artist)}`
-              : cleanText(r.item.title);
         // Right-aligned dim detail (duration / set size). Action rows have none.
         const meta = r.kind === "item" ? r.item.meta : undefined;
+        // The title leads in warm text and takes the orange accent when it's
+        // the cursor row or the playing song; the artist trails dim. That gentle
+        // contrast gives each row an anchor instead of one flat grey blur.
+        const titleColor = here || playing ? COLOR.accent : COLOR.text;
         return (
           <Box key={value}>
             <Text color={COLOR.accent}>{here ? `${ICON.pointer} ` : "  "}</Text>
@@ -211,14 +209,25 @@ export function SongList({
               </Box>
             ) : null}
             <Box flexGrow={1} minWidth={0}>
-              <Text
-                wrap="truncate-end"
-                color={here ? COLOR.accent : playing ? COLOR.text : undefined}
-                dimColor={!here && !playing}
-                bold={here}
-              >
-                {label}
-              </Text>
+              {r.kind === "action" ? (
+                <Text
+                  wrap="truncate-end"
+                  color={here ? COLOR.accent : undefined}
+                  dimColor={!here}
+                  bold={here}
+                >
+                  {r.label}
+                </Text>
+              ) : (
+                <Text wrap="truncate-end">
+                  <Text color={titleColor} bold={here}>
+                    {cleanText(r.item.title)}
+                  </Text>
+                  {r.item.artist ? (
+                    <Text dimColor>{`  ${ICON.dot}  ${cleanText(r.item.artist)}`}</Text>
+                  ) : null}
+                </Text>
+              )}
             </Box>
             {meta ? (
               <Box flexShrink={0} marginLeft={2}>

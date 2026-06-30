@@ -421,6 +421,31 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     expect(lines.some((l) => l.includes("Pick: toggle row"))).toBe(true);
   });
 
+  it("help overlay keeps a complete bordered box when compact", () => {
+    const { lastFrame } = render(
+      wrap(<HelpOverlay />, makeStore({ cols: 100, compact: true })),
+    );
+    const lines = (lastFrame() ?? "").split("\n").filter((l) => l.trim() !== "");
+    // The card must stay a closed box: a top corner on the first row and a
+    // bottom corner on the last. If the compact card overflowed, the bottom
+    // border (and footer) would be the part that clips off.
+    expect(lines[0]).toContain("╭"); // ╭
+    expect(lines[lines.length - 1]).toContain("╰"); // ╰
+    // Still the same card: header, a sample chord, and the close hint (folded
+    // into the header row in compact, not a separate footer line).
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Keyboard");
+    expect(frame).toContain("PgUp PgDn");
+    expect(frame).toContain("? esc to close");
+  });
+
+  it("help overlay keeps its standalone footer line when not compact", () => {
+    const { lastFrame } = render(
+      wrap(<HelpOverlay />, makeStore({ cols: 100, compact: false })),
+    );
+    expect(lastFrame() ?? "").toContain("Press ? or esc to close");
+  });
+
   it("playlists / opens local filter instead of jumping to library", async () => {
     const sections: string[] = [];
     const store = makeStore({

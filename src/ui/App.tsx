@@ -123,18 +123,21 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   );
 
   // Fit the whole layout inside the terminal so content never gets clipped.
-  // Below ~20 rows we go "compact": shed the wordmark, the top rule, and the
-  // body's top margin (and sections drop their idle search hint) so every
-  // freed row goes to the song list. The body/now-playing divider and the
-  // footer stay until even shorter terminals force them out.
+  // Below ~20 rows we go "compact": shed the wordmark (but keep the thin top
+  // rule as a header divider), the footer hint bar (the `?` cheatsheet still has
+  // every key), and the body's top margin, and sections drop their idle search
+  // hint, so every freed row goes to the song list. The now-playing divider
+  // holds until even shorter terminals force it out.
   const compact = rows < 20;
-  const showTopRule = !compact;
-  const showDivider = rows >= 12;
-  const showFooter = rows >= 14;
-  // The block wordmark only shows when there's room to spare (not compact) and
-  // the terminal is wide enough. Otherwise render no brand at all (no text
-  // fallback), reserving a row only for the transient mpv line when present.
+  // The block wordmark is decoration: shown only when there's room to spare (not
+  // compact) and the terminal is wide enough; otherwise no logo (no text
+  // fallback), reserving a row only for the transient mpv line. The thin top
+  // rule stays in compact as a header divider in place of the wordmark, and sits
+  // under the wordmark when it shows.
   const showLogo = !compact && cols >= 34;
+  const showTopRule = compact || showLogo;
+  const showDivider = rows >= 12;
+  const showFooter = !compact;
   const brandHeight = showLogo ? LOGO_LINES.length : mpvStatus ? 1 : 0;
   const chrome =
     brandHeight +
@@ -179,7 +182,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       // passes share one existence cache so each file is stat'd once per boot.
       const exists = new Map<string, boolean>();
       await migrateOwnerLayout(library, cfg, exists);
-      await reconcileLibrary(library, exists);
+      await reconcileLibrary(library, exists, cfg.libraryDir);
       lastReconcile.current = Date.now();
       // Library is now the source of truth, so drop the legacy yt-dlp archive.
       void fs.rm(legacyArchiveFile, { force: true }).catch(() => {});
@@ -288,30 +291,47 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     [boot],
   );
 
-  // Re-run drift hygiene when the user lands on a library-backed section, so
-  // the library stays in sync as they browse. Guarded so navigations don't
-  // stack, and throttled: rapid tab-hopping shouldn't restat the whole
-  // library when nothing on disk had time to change.
+  // Keep the library in step with disk without a restart: re-link files the
+  // user moved or reorganized inside the library folder, prune real deletions,
+  // and dedupe. Runs when landing on a library-backed section and on a quiet
+  // background interval, guarded so runs never stack and coalesced so rapid
+  // tab-hops don't restat. Cheap when nothing drifted: the folder rescan only
+  // happens when a track's file actually goes missing.
   const reconciling = useRef(false);
   const lastReconcile = useRef(0);
-  useEffect(() => {
+  const runReconcile = useCallback(() => {
     const library = boot?.library;
     if (!library || reconciling.current) return;
-    if (section !== "library" && section !== "playlists" && section !== "history") {
-      return;
-    }
-    if (Date.now() - lastReconcile.current < 30_000) return;
+    if (Date.now() - lastReconcile.current < 5_000) return;
     reconciling.current = true;
-    void reconcileLibrary(library)
-      .then(() => {
-        // Keep recently-played in step: drop entries whose track was pruned.
-        boot.history.retain((id) => library.has(id));
+    // A fresh cache per run so the missing-check and prune passes share stats
+    // (one access per track, not two), while each run still sees current disk.
+    void reconcileLibrary(library, new Map<string, boolean>(), config?.libraryDir)
+      .then((r) => {
+        // Only touch recently-played when a prune actually removed tracks, so an
+        // idle interval reconcile writes nothing.
+        if (r.prunedMissing > 0) boot.history.retain((id) => library.has(id));
       })
       .finally(() => {
         lastReconcile.current = Date.now();
         reconciling.current = false;
       });
-  }, [section, boot]);
+  }, [boot, config]);
+
+  useEffect(() => {
+    if (
+      section === "library" ||
+      section === "playlists" ||
+      section === "history"
+    ) {
+      runReconcile();
+    }
+  }, [section, runReconcile]);
+
+  useEffect(() => {
+    const id = setInterval(runReconcile, 15_000);
+    return () => clearInterval(id);
+  }, [runReconcile]);
 
   const quitAll = useCallback(() => {
     boot?.queue.suspend();
