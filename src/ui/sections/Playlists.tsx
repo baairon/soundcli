@@ -89,21 +89,6 @@ export function Playlists() {
     return ordered;
   }, [songs]);
 
-  // Sources where more than one handle contributes sets: prefix the owner so
-  // identically named collections (e.g. two "Liked Songs") stay tellable.
-  const multiOwnerSources = useMemo(() => {
-    const owners = new Map<SourceId, Set<string>>();
-    for (const s of sets) {
-      if (!s.owner) continue;
-      let o = owners.get(s.source);
-      if (!o) owners.set(s.source, (o = new Set()));
-      o.add(s.owner);
-    }
-    return new Set(
-      [...owners].filter(([, o]) => o.size > 1).map(([src]) => src),
-    );
-  }, [sets]);
-
   const searching = q.trim().length > 0;
   const qLower = q.toLowerCase();
   const filteredSets = useMemo(() => {
@@ -141,10 +126,7 @@ export function Playlists() {
     return filter === "all" ? base : base.filter((s) => s.source === filter);
   }, [sets, filteredSets, searching, filter]);
 
-  const setLabel = (s: SetInfo): string =>
-    multiOwnerSources.has(s.source) && s.owner
-      ? `${s.owner} ${ICON.dot} ${s.name}`
-      : s.name;
+  const setLabel = (s: SetInfo): string => s.name;
 
   const active =
     view.kind === "songs" ? sets.find((s) => s.key === view.setKey) : undefined;
@@ -376,7 +358,7 @@ export function Playlists() {
               ) : (
                 <Box flexGrow={1} minWidth={0}>
                   <Text dimColor wrap="truncate-end">
-                    {q || "Press / to search"}
+                    {q || "Press / to search your playlists"}
                   </Text>
                 </Box>
               )}

@@ -85,6 +85,14 @@ export class Library {
     await this.persist();
   }
 
+  /** Apply many track updates with a single notify + persist. */
+  async upsertMany(tracks: Track[]): Promise<void> {
+    if (tracks.length === 0) return;
+    for (const track of tracks) this.index.tracks[track.id] = track;
+    this.notify();
+    await this.persist();
+  }
+
   async remove(id: string): Promise<void> {
     delete this.index.tracks[id];
     this.notify();

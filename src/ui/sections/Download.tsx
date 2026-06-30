@@ -712,7 +712,7 @@ export function PlaylistPicker({
         ) : (
           <Box flexGrow={1} minWidth={0}>
             <Text dimColor wrap="truncate-end">
-              {q || "Press / to search"}
+              {q || "Press / to search playlists"}
             </Text>
           </Box>
         )}

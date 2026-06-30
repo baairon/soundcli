@@ -8,14 +8,9 @@ Own your music. soundcli downloads your YouTube, SoundCloud, and Spotify librari
 
 You only have to do this once. soundcli handles the rest itself.
 
-1. **Install Node.js.**  
-   Visit [nodejs.org](https://nodejs.org), download the installer, and click **Next** until it finishes. It's the one piece of software soundcli runs on.
-
-2. **Open your terminal.**  
-   On **Windows**, press the Windows key, type `terminal`, and press Enter. On a **Mac**, press `Cmd + Space`, type `terminal`, and press Enter. A plain window will open. That's the terminal, and it's all you need to get going.
-
-3. **Start soundcli.**  
-   Copy the line below, paste it into the terminal, and press **Enter**:
+1. **Install Node.js** from [nodejs.org](https://nodejs.org): download the installer and click **Next** until it finishes. It's the one piece of software soundcli runs on.
+2. **Open your terminal.** On **Windows**, press the Windows key, type `terminal`, and press Enter. On a **Mac**, press `Cmd + Space`, type `terminal`, and press Enter. A plain window opens, and that's all you need to get going.
+3. **Start soundcli.** Copy the line below, paste it into the terminal, and press **Enter**:
 
    ```sh
    npx sndcli
@@ -47,24 +42,36 @@ Everything runs from the keyboard, with controls that are quick to pick up. Pres
   <img src="preview/keys.svg" alt="The keyboard cheatsheet: navigate, player, and download keys" style="max-width: 832px; width: 100%; height: auto;">
 </p>
 
-## Local Development
+## Contributing
 
-If you want to run or develop soundcli locally:
+Issues and pull requests are welcome. soundcli is TypeScript with an Ink
+terminal UI, riding on yt-dlp and mpv.
 
-1. Clone the repository and navigate into the directory.
-2. Install dependencies:
+Run it locally:
+
+1. Clone the repo and open the folder.
+2. Install dependencies (Node 22 or newer):
    ```sh
    npm install
    ```
-3. Run the development version:
+3. Start the dev build, which runs straight from source:
    ```sh
    npm run dev
    ```
-   Or build the project and run it:
+   Or build it and run the bundled version:
    ```sh
    npm run build
-   npx sndcli
+   npm start
    ```
+
+Before opening a pull request:
+
+- Run the tests: `npm test`
+- Check types: `npm run typecheck`
+- Write commits in Conventional Commits style (`fix:`, `feat:`, `docs:`, `chore:`, `refactor:`)
+- Keep the UI surface minimal: one contextual footer plus the `?` cheatsheet, never a wall of commands
+
+Then open a PR against `main` with a short note on what changed and why.
 
 ## Privacy
 
@@ -79,5 +86,3 @@ soundcli runs on your computer and nowhere else. There are no accounts, no login
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&legend=top-left" />
  </picture>
 </a>
-
-

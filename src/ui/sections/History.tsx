@@ -192,7 +192,7 @@ export function History() {
                   onSubmit={() => setEditing(false)}
                 />
               ) : (
-                <Text dimColor>{q || "Press / to search"}</Text>
+                <Text dimColor>{q || "Press / to search your history"}</Text>
               )}
             </>
           )}

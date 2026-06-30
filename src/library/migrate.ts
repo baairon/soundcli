@@ -35,6 +35,10 @@ export async function migrateOwnerLayout(
     // Spotify collections are pasted links, not handles: never owner-scoped.
     if (t.source === "spotify") continue;
 
+    // Already-owned tracks are post-migration (downloads write the owner and the
+    // canonical path), so only legacy ownerless tracks ever need relocating.
+    const wasOwnerless = !t.owner;
+
     let owner = t.owner;
     if (!owner) {
       const handle =
@@ -56,6 +60,13 @@ export async function migrateOwnerLayout(
         backfilled++;
       }
     };
+
+    // Don't drag an already-migrated track back to the canonical layout: respect
+    // wherever the user has since moved it (reconcile re-links moves instead).
+    if (!wasOwnerless) {
+      await backfillOnly();
+      continue;
+    }
 
     // Only relocate files living inside the current music folder; anything
     // else (changed libraryDir, cross-drive leftovers) gets the owner stamp

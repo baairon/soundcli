@@ -30,7 +30,7 @@ const KEY_W_STACKED = Math.max(...KEY_W);
  * narrow so nothing ever overlaps.
  */
 export function HelpOverlay() {
-  const { cols } = useStore();
+  const { cols, compact } = useStore();
   const columns = cols >= CARD_W;
 
   return (
@@ -40,12 +40,20 @@ export function HelpOverlay() {
       borderStyle="round"
       borderColor={CARD_BORDER}
       paddingX={columns ? 1 : 2}
-      paddingY={1}
+      paddingY={compact ? 0 : 1}
     >
-      <Text bold color={COLOR.accent}>
-        Keyboard
-      </Text>
-      <Box marginTop={1} flexDirection={columns ? "row" : "column"}>
+      <Box>
+        <Text bold color={COLOR.accent}>
+          Keyboard
+        </Text>
+        {/* Short terminals can't spare the standalone footer row, so the close
+            hint rides the header instead of clipping off the bottom border. */}
+        {compact ? <Text dimColor>{"  "}? esc to close</Text> : null}
+      </Box>
+      <Box
+        marginTop={compact ? 0 : 1}
+        flexDirection={columns ? "row" : "column"}
+      >
         {HELP_GROUPS.map((group, gi) => (
           <Box
             key={group.title}
@@ -69,9 +77,11 @@ export function HelpOverlay() {
           </Box>
         ))}
       </Box>
-      <Box marginTop={1}>
-        <Text dimColor>Press ? or esc to close</Text>
-      </Box>
+      {compact ? null : (
+        <Box marginTop={1}>
+          <Text dimColor>Press ? or esc to close</Text>
+        </Box>
+      )}
     </Box>
   );
 }

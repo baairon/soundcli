@@ -24,8 +24,15 @@ function fakeLibrary(tracks: Track[]): Library {
   const map = new Map(tracks.map((t) => [t.id, t]));
   return {
     all: () => [...map.values()],
+    get: (id: string) => map.get(id),
     remove: async (id: string) => {
       map.delete(id);
+    },
+    upsert: async (t: Track) => {
+      map.set(t.id, t);
+    },
+    upsertMany: async (ts: Track[]) => {
+      for (const t of ts) map.set(t.id, t);
     },
   } as unknown as Library;
 }
@@ -73,8 +80,116 @@ describe("reconcileLibrary", () => {
     const library = fakeLibrary([track({ id: "youtube:a", filePath: f })]);
     const r = await reconcileLibrary(library);
 
-    expect(r).toEqual({ prunedMissing: 0, mergedDuplicates: 0, deletedFiles: 0 });
+    expect(r).toEqual({
+      prunedMissing: 0,
+      mergedDuplicates: 0,
+      deletedFiles: 0,
+      relinked: 0,
+    });
     expect(library.all()).toHaveLength(1);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("re-links a file moved within the library instead of pruning it", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-move-"));
+    const moved = path.join(dir, "sub", "song.mp3");
+    await fs.mkdir(path.dirname(moved), { recursive: true });
+    await fs.writeFile(moved, "audio");
+    // The index still points at the old location; only the moved file exists.
+    const stale = path.join(dir, "song.mp3");
+
+    const library = fakeLibrary([track({ id: "youtube:a", filePath: stale })]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.relinked).toBe(1);
+    expect(r.prunedMissing).toBe(0);
+    expect(library.all()[0]!.filePath).toBe(moved);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("still prunes a file that is genuinely gone", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-gone-"));
+    const library = fakeLibrary([
+      track({ id: "youtube:a", filePath: path.join(dir, "ghost.mp3") }),
+    ]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.relinked).toBe(0);
+    expect(r.prunedMissing).toBe(1);
+    expect(library.all()).toHaveLength(0);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("never steals a present track's file when re-linking", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-claim-"));
+    const present = path.join(dir, "song.mp3");
+    await fs.writeFile(present, "audio"); // belongs to a, still on disk
+
+    // b points at a missing path with the same basename; a's file is the only one.
+    const library = fakeLibrary([
+      track({ id: "youtube:a", filePath: present }),
+      track({
+        id: "youtube:b",
+        title: "Other",
+        artist: "Z",
+        filePath: path.join(dir, "missing", "song.mp3"),
+      }),
+    ]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    // b can't take a's file, so b is pruned and a survives untouched.
+    expect(r.relinked).toBe(0);
+    expect(r.prunedMissing).toBe(1);
+    expect(library.all().map((t) => t.id)).toEqual(["youtube:a"]);
+    expect(library.all()[0]!.filePath).toBe(present);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("re-links a renamed file by its recorded content size", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-rename-"));
+    const renamed = path.join(dir, "a totally different name.mp3");
+    await fs.writeFile(renamed, "some audio bytes"); // 16 bytes
+    const stale = path.join(dir, "original.mp3"); // gone, different basename
+
+    const library = fakeLibrary([
+      track({ id: "youtube:a", filePath: stale, fileSize: 16 }),
+    ]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.relinked).toBe(1);
+    expect(r.prunedMissing).toBe(0);
+    expect(library.all()[0]!.filePath).toBe(renamed);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("prunes a renamed file when no size was ever recorded", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-norec-"));
+    await fs.writeFile(path.join(dir, "renamed.mp3"), "audio");
+    const library = fakeLibrary([
+      track({ id: "youtube:a", filePath: path.join(dir, "old.mp3") }), // no fileSize
+    ]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.relinked).toBe(0);
+    expect(r.prunedMissing).toBe(1);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("backfills file sizes for present tracks so future renames re-link", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-size-"));
+    const f = path.join(dir, "song.mp3");
+    await fs.writeFile(f, "audio"); // 5 bytes
+    const library = fakeLibrary([track({ id: "youtube:a", filePath: f })]);
+
+    await reconcileLibrary(library, undefined, dir);
+
+    expect(library.all()[0]!.fileSize).toBe(5);
 
     await fs.rm(dir, { recursive: true, force: true });
   });

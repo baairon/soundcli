@@ -33,6 +33,8 @@ export interface Track {
   durationSec?: number;
   /** Absolute path to the downloaded audio file. */
   filePath: string;
+  /** Byte size of the audio file, recorded so a renamed file can be re-linked. */
+  fileSize?: number;
   webpageUrl?: string;
   /** Playlist this track was downloaded under, if any. */
   playlist?: string;
