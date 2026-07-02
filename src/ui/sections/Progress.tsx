@@ -10,17 +10,26 @@ export function Progress() {
   const focused = section === "progress" && region === "content";
   const items = useQueueItems(queue);
   const [schedules, setSchedules] = useState<SourceSchedule[]>([]);
+  const [now, setNow] = useState(Date.now());
+
+  // Update current time every second for countdown display
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Load active schedules on mount and refresh periodically
   useEffect(() => {
     const load = async () => {
       const active = await getActiveSchedules();
       setSchedules(active);
+      // Check if any schedules expired and auto-resume
+      await queue.checkScheduledResumes();
     };
     load();
-    const interval = setInterval(load, 5000); // Refresh every 5 seconds
+    const interval = setInterval(load, 1000); // Refresh every second
     return () => clearInterval(interval);
-  }, []);
+  }, [queue]);
 
   // Calculate remaining downloads per source from queue items
   const remainingBySource = useMemo(() => {
@@ -61,7 +70,6 @@ export function Progress() {
     return status;
   }, [schedules, remainingBySource]);
 
-  const now = Date.now();
   const sortedSources = Array.from(sourceStatus.entries()).sort((a, b) => {
     // Sort by scheduled time (soonest first), then by remaining count
     if (a[1].scheduled && b[1].scheduled) {
