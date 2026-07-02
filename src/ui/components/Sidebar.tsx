@@ -13,6 +13,7 @@ const NAV: NavItem[] = [
   { key: "playlists", label: "Playlists" },
   { key: "history", label: "History" },
   { key: "download", label: "Download" },
+  { key: "progress", label: "Progress" },
   { key: "settings", label: "Settings" },
 ];
 

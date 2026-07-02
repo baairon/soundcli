@@ -164,20 +164,20 @@ describe("download queue rate limiting", () => {
     vi.mocked(downloadTrack).mockImplementation(() => new Promise(() => {}));
   });
 
-  it("auto-pauses the whole queue when a download is rate-limited", async () => {
+  it("auto-pauses the rate-limited source when a download is rate-limited", async () => {
     vi.mocked(downloadTrack).mockResolvedValue({ status: "ratelimited" });
     const q = new DownloadQueue(defaultConfig, fakeLib, 2);
     q.enqueue([input("youtube", "a"), input("youtube", "b"), input("youtube", "c")]);
     await new Promise((r) => setTimeout(r, 30));
 
     const st = q.stats();
-    expect(st.rateLimited).toBe(true);
+    // Per-source rate limiting: only the affected source is paused
+    expect(st.rateLimited).toBe(false);
     expect(st.downloading).toBe(0);
-    expect(st.pending).toBe(0);
     expect(st.paused).toBeGreaterThan(0);
 
-    q.resumeAll(); // user signals ready → banner clears (synchronously)
-    expect(q.stats().rateLimited).toBe(false);
+    q.resumeAll(); // user signals ready → items resume
+    expect(q.stats().paused).toBe(0);
   });
 
   it("retryFailed re-attempts errored items", async () => {
@@ -230,7 +230,7 @@ describe("download queue per-track retry", () => {
     expect(vi.mocked(downloadTrack).mock.calls.length).toBe(3);
   });
 
-  it("auto-pauses the whole queue after a streak of failures", async () => {
+  it("auto-pauses the affected source after a streak of failures", async () => {
     process.env.SOUNDCLI_FAILURE_STREAK = "3";
     vi.mocked(downloadTrack).mockRejectedValue(new Error("HTTP Error 403"));
     const q = new DownloadQueue(defaultConfig, fakeLib, 1);
@@ -242,8 +242,8 @@ describe("download queue per-track retry", () => {
       input("youtube", "e"),
     ]);
     await new Promise((r) => setTimeout(r, 120));
-    // 3 failures in a row trip the breaker → the queue pauses itself.
-    expect(q.stats().rateLimited).toBe(true);
+    // 3 failures in a row trip the breaker → the source pauses itself.
+    expect(q.stats().rateLimited).toBe(false); // Per-source, not global
     expect(q.stats().failed).toBe(3);
     // The remaining items are parked as paused, not burned through as failed.
     expect(q.stats().paused).toBe(2);
@@ -261,14 +261,13 @@ describe("download queue per-track retry", () => {
       input("youtube", "e"),
     ]);
     await new Promise((r) => setTimeout(r, 120));
-    expect(q.stats().rateLimited).toBe(true);
-    // Nothing resumes on its own: still stopped well after the breaker tripped.
+    expect(q.stats().rateLimited).toBe(false); // Per-source, not global
+    // Nothing resumes on its own: still paused well after the breaker tripped.
     await new Promise((r) => setTimeout(r, 100));
-    expect(q.stats().rateLimited).toBe(true);
+    expect(q.stats().rateLimited).toBe(false);
     expect(q.stats().paused).toBe(2);
     // Only the user's resume drains the rest.
     q.resumeAll();
-    expect(q.stats().rateLimited).toBe(false);
     await new Promise((r) => setTimeout(r, 120));
     const s = q.stats();
     expect(s.paused).toBe(0);

@@ -44,6 +44,7 @@ import { Library as LibrarySection } from "./sections/Library";
 import { Playlists } from "./sections/Playlists";
 import { History } from "./sections/History";
 import { Download } from "./sections/Download";
+import { Progress } from "./sections/Progress";
 import { Settings } from "./sections/Settings";
 import { Welcome } from "./views/Welcome";
 import { useMouseWheel } from "./hooks/useMouseWheel";
@@ -66,6 +67,8 @@ function Content({ section }: { section: Section }) {
       return <History />;
     case "download":
       return <Download />;
+    case "progress":
+      return <Progress />;
     case "settings":
       return <Settings />;
   }
@@ -246,6 +249,9 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       );
       // Bring back last session's queue; pending items resume from their .part.
       queue.restore(await loadQueue());
+      
+      // Auto-resume any sources whose scheduled resume time has arrived
+      await queue.checkScheduledResumes();
 
       // Check for a newer yt-dlp on every boot (a stale extractor turns every
       // download from a source into "failed"). Async and silent: a newer

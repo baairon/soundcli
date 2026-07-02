@@ -30,3 +30,6 @@ export const legacyArchiveFile = path.join(paths.data, "download-archive.txt");
 
 /** Raw download-failure log (the UI shows short reasons; this keeps the data). */
 export const downloadLogFile = path.join(paths.log, "downloads.log");
+
+/** Resume schedule tracking for rate-limited downloads per source. */
+export const resumeScheduleFile = path.join(paths.data, "resume-schedule.json");

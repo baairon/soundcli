@@ -21,6 +21,13 @@ import {
   saveQueueSync,
   type PersistedItem,
 } from "./persist";
+import {
+  clearSchedule,
+  getActiveSchedules,
+  isSourceScheduled,
+  scheduleResume,
+  type SourceSchedule,
+} from "./resume-schedule";
 
 export type QueueStatus =
   | "pending"
@@ -78,6 +85,12 @@ let counter = 0;
 
 /** Fixed number of simultaneous downloads (not user-configurable). */
 const DEFAULT_CONCURRENCY = 3;
+
+/**
+ * Maximum downloads per source per batch before pausing to avoid rate limits.
+ * This is "per pagination" - we download in chunks to prevent overwhelming sources.
+ */
+const PER_SOURCE_BATCH_LIMIT = 20;
 
 /**
  * Pause the whole queue after this many hard failures in a row. A cluster of
@@ -147,6 +160,11 @@ export class DownloadQueue extends EventEmitter {
   private failingSource: string | null = null;
   /** One rotation check per process, so the failure log stays bounded. */
   private logRotated = false;
+  /**
+   * Track downloads completed per source in the current batch for pagination.
+   * When a source reaches PER_SOURCE_BATCH_LIMIT, we pause it to avoid rate limits.
+   */
+  private perSourceCounts = new Map<SourceId, number>();
   /**
    * Aborts the in-flight "gather" (the UI enumerating selected playlists and
    * streaming their tracks in via enqueue). Cancelling/clearing the queue trips
@@ -349,6 +367,39 @@ export class DownloadQueue extends EventEmitter {
     this.pump();
   }
 
+  /**
+   * Check for sources whose scheduled resume time has arrived and resume them.
+   * Called on app startup to auto-resume rate-limited sources.
+   */
+  async checkScheduledResumes(): Promise<void> {
+    const schedules = await getActiveSchedules();
+    const now = Date.now();
+    
+    for (const schedule of schedules) {
+      if (schedule.resumeAt <= now) {
+        // Resume time has arrived - clear the schedule and resume items
+        await clearSchedule(schedule.source);
+        
+        let resumed = 0;
+        for (const item of this.items) {
+          if (item.source === schedule.source && item.status === "paused") {
+            item.status = "pending";
+            item.error = undefined;
+            resumed++;
+          }
+        }
+        
+        if (resumed > 0) {
+          this.stopped = false;
+          this.consecutiveErrors = 0;
+          this.emit("update");
+          this.scheduleSave();
+          this.pump();
+        }
+      }
+    }
+  }
+
   /** Re-queue everything that failed (clears the error). */
   retryFailed(): void {
     let any = false;
@@ -371,27 +422,35 @@ export class DownloadQueue extends EventEmitter {
   }
 
   /**
-   * Platform throttled us: stop the whole queue and say so. Nothing resumes on
-   * its own: hammering a throttling platform on a timer just digs the hole
-   * deeper. Progress (including .part files) is kept; the user resumes with `]`
-   * whenever they're ready.
+   * Platform throttled us: schedule a resume for this source and pause its items.
+   * Other sources continue downloading. Progress (including .part files) is kept.
    */
-  private onRateLimited(reason: string): void {
-    this.rateLimited = true;
-    this.rateLimitReason = reason;
-    this.stopped = true;
-    this.consecutiveErrors = 0;
+  private async onRateLimited(source: SourceId, sourceLabel: string, reason: string): Promise<void> {
+    // Count remaining items for this source
+    const remaining = this.items.filter(
+      (i) => i.source === source && (i.status === "pending" || i.status === "downloading"),
+    ).length;
+    
+    // Schedule a resume for this source
+    await scheduleResume(source, sourceLabel, remaining, reason);
+    
+    // Pause only items from this source
     for (const i of this.items) {
-      if (i.status === "pending") {
-        i.status = "paused";
-        i.percent = 0;
-      } else if (i.status === "downloading") {
-        this.pausing.add(i.id);
-        this.controllers.get(i.id)?.abort();
+      if (i.source === source) {
+        if (i.status === "pending") {
+          i.status = "paused";
+          i.percent = 0;
+        } else if (i.status === "downloading") {
+          this.pausing.add(i.id);
+          this.controllers.get(i.id)?.abort();
+        }
       }
     }
+    
+    this.consecutiveErrors = 0;
     this.emit("update");
     this.scheduleSave();
+    this.pump();
   }
 
   /**
@@ -680,7 +739,21 @@ export class DownloadQueue extends EventEmitter {
       item.status = "paused";
       item.percent = 0;
       this.pausing.delete(item.id);
-      this.onRateLimited(WAITING_FOR_TOOLS);
+      // Tools not ready: pause everything (not source-specific)
+      this.rateLimited = true;
+      this.rateLimitReason = WAITING_FOR_TOOLS;
+      this.stopped = true;
+      for (const i of this.items) {
+        if (i.status === "pending") {
+          i.status = "paused";
+          i.percent = 0;
+        } else if (i.status === "downloading") {
+          this.pausing.add(i.id);
+          this.controllers.get(i.id)?.abort();
+        }
+      }
+      this.emit("update");
+      this.scheduleSave();
       if (this.activeCount === 0) this.runStartedAt = null;
       return;
     }
@@ -739,9 +812,9 @@ export class DownloadQueue extends EventEmitter {
       );
 
       if (res.status === "ratelimited") {
-        // Don't fail it: keep it (with its .part) and pause the whole queue.
+        // Don't fail it: keep it (with its .part) and pause this source.
         item.status = "paused";
-        this.onRateLimited(item.sourceLabel);
+        await this.onRateLimited(item.source, item.sourceLabel, "rate limited by platform");
       } else if (res.status === "canceled") {
         // Distinguish a pause (keep it, resumable) from a real cancel.
         item.status = this.pausing.has(item.id) ? "paused" : "canceled";
@@ -804,6 +877,26 @@ export class DownloadQueue extends EventEmitter {
           item.status = "done";
           this.consecutiveErrors = 0;
           this.noteSourceSuccess(item.sourceLabel);
+          
+          // Check per-source pagination limit
+          const count = (this.perSourceCounts.get(item.source) ?? 0) + 1;
+          this.perSourceCounts.set(item.source, count);
+          if (count >= PER_SOURCE_BATCH_LIMIT) {
+            // Schedule a pause for this source to avoid rate limits
+            const remaining = this.items.filter(
+              (i) => i.source === item.source && (i.status === "pending" || i.status === "downloading"),
+            ).length;
+            if (remaining > 0) {
+              await scheduleResume(item.source, item.sourceLabel, remaining, "batch limit reached");
+              // Pause remaining items from this source
+              for (const i of this.items) {
+                if (i.source === item.source && i.status === "pending") {
+                  i.status = "paused";
+                  i.percent = 0;
+                }
+              }
+            }
+          }
         }
       } else {
         item.percent = 100;
@@ -824,7 +917,8 @@ export class DownloadQueue extends EventEmitter {
       if (!isPermanentTrackError(item.error)) {
         this.consecutiveErrors++;
         if (this.consecutiveErrors >= failureStreakLimit() && !this.rateLimited) {
-          this.onRateLimited("repeated errors");
+          // Repeated errors: pause this source only
+          await this.onRateLimited(item.source, item.sourceLabel, "repeated download errors");
         }
       } else if (!/drm/i.test(item.error)) {
         // DRM is the platform telling the truth about the track, not a sign
