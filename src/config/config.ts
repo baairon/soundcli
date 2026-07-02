@@ -20,6 +20,14 @@ export interface Config {
   firstRunComplete: boolean;
   /** Check for yt-dlp updates at every launch (staged, applied when idle). */
   ytdlpAutoUpdate?: boolean;
+  /** Per-source batch limits for rate limiting (max 80% of platform limits). */
+  batchLimits?: {
+    youtube?: number;
+    soundcloud?: number;
+    spotify?: number;
+    link?: number;
+    local?: number;
+  };
 }
 
 /** Drop deprecated keys before returning config or writing it to disk. */

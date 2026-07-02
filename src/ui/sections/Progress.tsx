@@ -43,9 +43,21 @@ export function Progress() {
     return counts;
   }, [items]);
 
+  // Calculate batch progress per source
+  const batchProgressBySource = useMemo(() => {
+    const progress = new Map<string, { current: number; limit: number }>();
+    for (const item of items) {
+      if (item.status === "downloading" || item.status === "done" || item.status === "pending" || item.status === "paused") {
+        const current = queue.getBatchCount(item.source);
+        progress.set(item.sourceLabel, { current, limit: 20 });
+      }
+    }
+    return progress;
+  }, [items, queue]);
+
   // Combine queue data with schedule data
   const sourceStatus = useMemo(() => {
-    const status = new Map<string, { remaining: number; scheduled: boolean; resumeAt?: number; reason?: string }>();
+    const status = new Map<string, { remaining: number; scheduled: boolean; resumeAt?: number; reason?: string; batchProgress?: { current: number; limit: number } }>();
     
     // Add data from schedules
     for (const schedule of schedules) {
@@ -54,6 +66,7 @@ export function Progress() {
         scheduled: true,
         resumeAt: schedule.resumeAt,
         reason: schedule.reason,
+        batchProgress: batchProgressBySource.get(schedule.sourceLabel),
       });
     }
     
@@ -63,12 +76,13 @@ export function Progress() {
         status.set(label, {
           remaining: count,
           scheduled: false,
+          batchProgress: batchProgressBySource.get(label),
         });
       }
     }
     
     return status;
-  }, [schedules, remainingBySource]);
+  }, [schedules, remainingBySource, batchProgressBySource]);
 
   const sortedSources = Array.from(sourceStatus.entries()).sort((a, b) => {
     // Sort by scheduled time (soonest first), then by remaining count
@@ -93,12 +107,18 @@ export function Progress() {
     { isActive: focused },
   );
 
-  // Format time until resume
+  // Format time until resume with seconds for ticking animation
   const formatTimeUntil = (ms: number): string => {
     const seconds = Math.floor(ms / 1000);
     if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-    return `${Math.floor(seconds / 3600)}h`;
+    if (seconds < 3600) {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins}m ${secs}s`;
+    }
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
   };
 
   return (
@@ -115,18 +135,24 @@ export function Progress() {
           {sortedSources.map(([label, status]) => {
             const timeUntil = status.resumeAt ? Math.max(0, status.resumeAt - now) : 0;
             const timeStr = timeUntil > 0 ? formatTimeUntil(timeUntil) : "Ready";
+            const batch = status.batchProgress;
+            const batchRemaining = batch ? Math.max(0, batch.limit - batch.current) : 0;
+            const batchStr = batch ? `${batchRemaining} left in batch` : "";
+            const approachingLimit = batch && batch.current >= batch.limit * 0.8; // 80% threshold
             
             return (
               <Box key={label} flexDirection="column" marginBottom={1}>
                 <Box>
-                  <Text color={status.scheduled ? COLOR.warn : COLOR.good}>
-                    {status.scheduled ? ICON.pending : ICON.done}
+                  <Text color={status.scheduled ? COLOR.warn : approachingLimit ? COLOR.warn : COLOR.good}>
+                    {status.scheduled ? ICON.pending : approachingLimit ? ICON.warn : ICON.done}
                   </Text>
                   <Text> {label}</Text>
                 </Box>
                 <Box marginLeft={2}>
                   <Text dimColor>
-                    {status.remaining} remaining {status.scheduled ? `· resumes in ${timeStr}` : ""}
+                    {status.remaining} remaining
+                    {batchStr && ` · ${batchStr}`}
+                    {status.scheduled ? ` · resumes in ${timeStr}` : ""}
                   </Text>
                 </Box>
                 {status.reason && (

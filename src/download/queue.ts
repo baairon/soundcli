@@ -89,8 +89,38 @@ const DEFAULT_CONCURRENCY = 3;
 /**
  * Maximum downloads per source per batch before pausing to avoid rate limits.
  * This is "per pagination" - we download in chunks to prevent overwhelming sources.
+ * Can be overridden via config.batchLimits.
  */
-const PER_SOURCE_BATCH_LIMIT = 20;
+const DEFAULT_PER_SOURCE_BATCH_LIMIT = 20;
+
+/** Platform rate limits (requests per hour) for validation. */
+const PLATFORM_LIMITS: Record<string, number> = {
+  youtube: 100, // ~100 requests/hour
+  soundcloud: 200, // ~200-300 requests/hour (conservative)
+  spotify: 6000, // ~100-200 requests/minute = 6000-12000/hour (conservative)
+  link: 100, // No platform limit, use conservative default
+  local: 100, // No platform limit, use conservative default
+};
+
+/** 80% safety margin for platform limits. */
+const SAFETY_MARGIN = 0.8;
+
+/** Get the batch limit for a source from config or default. */
+function getBatchLimit(source: SourceId, config: Config): number {
+  const customLimit = config.batchLimits?.[source as keyof Config["batchLimits"]];
+  if (customLimit !== undefined) {
+    const platformLimit = PLATFORM_LIMITS[source] ?? 100;
+    const maxAllowed = Math.floor(platformLimit * SAFETY_MARGIN);
+    if (customLimit > maxAllowed) {
+      console.warn(
+        `Batch limit for ${source} (${customLimit}) exceeds 80% of platform limit (${maxAllowed}). Using ${maxAllowed}.`,
+      );
+      return maxAllowed;
+    }
+    return customLimit;
+  }
+  return DEFAULT_PER_SOURCE_BATCH_LIMIT;
+}
 
 /**
  * Pause the whole queue after this many hard failures in a row. A cluster of
@@ -165,6 +195,11 @@ export class DownloadQueue extends EventEmitter {
    * When a source reaches PER_SOURCE_BATCH_LIMIT, we pause it to avoid rate limits.
    */
   private perSourceCounts = new Map<SourceId, number>();
+
+  /** Get the current batch count for a source (for UI display). */
+  getBatchCount(source: SourceId): number {
+    return this.perSourceCounts.get(source) ?? 0;
+  }
   /**
    * Aborts the in-flight "gather" (the UI enumerating selected playlists and
    * streaming their tracks in via enqueue). Cancelling/clearing the queue trips
@@ -881,21 +916,23 @@ export class DownloadQueue extends EventEmitter {
           // Check per-source pagination limit
           const count = (this.perSourceCounts.get(item.source) ?? 0) + 1;
           this.perSourceCounts.set(item.source, count);
-          if (count >= PER_SOURCE_BATCH_LIMIT) {
+          const batchLimit = getBatchLimit(item.source, this.config);
+          if (count >= batchLimit) {
             // Schedule a pause for this source to avoid rate limits
             const remaining = this.items.filter(
               (i) => i.source === item.source && (i.status === "pending" || i.status === "downloading"),
             ).length;
-            if (remaining > 0) {
-              await scheduleResume(item.source, item.sourceLabel, remaining, "batch limit reached");
-              // Pause remaining items from this source
-              for (const i of this.items) {
-                if (i.source === item.source && i.status === "pending") {
-                  i.status = "paused";
-                  i.percent = 0;
-                }
+            // Always create a schedule so the countdown shows in UI
+            await scheduleResume(item.source, item.sourceLabel, remaining, "batch limit reached");
+            // Pause remaining items from this source
+            for (const i of this.items) {
+              if (i.source === item.source && i.status === "pending") {
+                i.status = "paused";
+                i.percent = 0;
               }
             }
+            // Reset batch count for next batch
+            this.perSourceCounts.set(item.source, 0);
           }
         }
       } else {
