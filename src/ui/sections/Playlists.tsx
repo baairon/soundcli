@@ -57,6 +57,10 @@ export function Playlists() {
   const [q, setQ] = useState("");
   const [filtering, setFiltering] = useState(false);
   const [filter, setFilter] = useState<SourceFilter>("all");
+  const [renamingSetKey, setRenamingSetKey] = useState<string | null>(null);
+  const [newPlaylistName, setNewPlaylistName] = useState("");
+  const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
+  const [newTrackTitle, setNewTrackTitle] = useState("");
 
   const songs = useMemo(
     // library.all() is already newest-first; recompute on new downloads and
@@ -145,6 +149,8 @@ export function Playlists() {
   const inSets = focused && view.kind === "sets";
   const confirming = focused && confirm !== null;
   const filteringSets = inSets && filtering;
+  const renamingSet = inSets && renamingSetKey !== null;
+  const renamingTrack = inSongs && renamingTrackId !== null;
   useEffect(() => {
     // The sets list claims no special mode: like Library, a plain esc falls
     // through to the global handler and returns focus to the sidebar. Only the
@@ -155,12 +161,16 @@ export function Playlists() {
         ? "esc"
         : filteringSets
           ? "text"
-          : inSongs
-            ? "esc"
-            : "none",
+          : renamingSet
+            ? "text"
+            : renamingTrack
+              ? "text"
+              : inSongs
+                ? "esc"
+                : "none",
     );
     return () => setCaptureMode("none");
-  }, [confirming, filteringSets, inSongs, setCaptureMode]);
+  }, [confirming, filteringSets, inSongs, renamingSet, renamingTrack, setCaptureMode]);
 
   function stepSourceTab(dir: -1 | 1): void {
     const i = tabs.indexOf(filter);
@@ -171,8 +181,47 @@ export function Playlists() {
     (_input, key) => {
       if (key.escape) setView({ kind: "sets" });
     },
-    { isActive: inSongs && !confirm },
+    { isActive: inSongs && !confirm && !renamingTrack },
   );
+
+  useInput(
+    (input) => {
+      if (input === "t" && !confirm && active) {
+        const firstTrack = active.tracks.length > 0 ? active.tracks[0] : null;
+        if (firstTrack) {
+          setRenamingTrackId(firstTrack.id);
+          setNewTrackTitle(firstTrack.title);
+        }
+        return;
+      }
+    },
+    { isActive: inSongs && !confirm && !renamingTrack },
+  );
+
+  useInput(
+    (_input, key) => {
+      if (key.escape) {
+        setRenamingTrackId(null);
+        setNewTrackTitle("");
+      }
+    },
+    { isActive: renamingTrack },
+  );
+
+  const handleTrackRenameSubmit = async () => {
+    if (!renamingTrackId || !newTrackTitle.trim()) return;
+    const track = library.get(renamingTrackId);
+    if (!track) return;
+    const newTitle = newTrackTitle.trim();
+    if (track.title === newTitle) {
+      setRenamingTrackId(null);
+      setNewTrackTitle("");
+      return;
+    }
+    await library.upsert({ ...track, title: newTitle });
+    setRenamingTrackId(null);
+    setNewTrackTitle("");
+  };
 
   useInput(
     (input) => {
@@ -180,10 +229,18 @@ export function Playlists() {
         setFiltering(true);
         return;
       }
+      if (input === "t" && !filtering && !confirm) {
+        const selectedSet = visibleSets.length > 0 ? visibleSets[0] : null;
+        if (selectedSet) {
+          setRenamingSetKey(selectedSet.key);
+          setNewPlaylistName(selectedSet.name);
+        }
+        return;
+      }
       if (input === "[") stepSourceTab(-1);
       else if (input === "]") stepSourceTab(1);
     },
-    { isActive: focused && !confirm && !filtering && inSets },
+    { isActive: focused && !confirm && !filtering && !renamingSet && inSets },
   );
 
   useInput(
@@ -192,6 +249,36 @@ export function Playlists() {
     },
     { isActive: inSets && filtering },
   );
+
+  useInput(
+    (_input, key) => {
+      if (key.escape) {
+        setRenamingSetKey(null);
+        setNewPlaylistName("");
+      }
+    },
+    { isActive: inSets && renamingSet },
+  );
+
+  const handleRenameSubmit = async () => {
+    if (!renamingSetKey || !newPlaylistName.trim()) return;
+    const targetSet = sets.find((s) => s.key === renamingSetKey);
+    if (!targetSet) return;
+    const oldName = targetSet.name;
+    const newName = newPlaylistName.trim();
+    if (oldName === newName) {
+      setRenamingSetKey(null);
+      setNewPlaylistName("");
+      return;
+    }
+    const tracksToUpdate = targetSet.tracks.map((t) => ({
+      ...t,
+      playlist: newName,
+    }));
+    await library.upsertMany(tracksToUpdate);
+    setRenamingSetKey(null);
+    setNewPlaylistName("");
+  };
 
   // y commits the pending delete (one song, or a whole set and its folder),
   // esc keeps it. Playback stops first when the playing song is a victim:
@@ -262,6 +349,15 @@ export function Playlists() {
               {confirmText()}
             </Text>
           </Box>
+        ) : renamingTrack ? (
+          <Box marginBottom={compact ? 0 : 1} flexShrink={0}>
+            <TextField
+              defaultValue={newTrackTitle}
+              placeholder="New title…"
+              onChange={setNewTrackTitle}
+              onSubmit={handleTrackRenameSubmit}
+            />
+          </Box>
         ) : null}
         <SongList
           key={active.key}
@@ -286,8 +382,8 @@ export function Playlists() {
           numbered
           actionGap={n > 1}
           playingId={playingId}
-          focused={focused && !confirm}
-          reserveRows={confirm ? 1 : 0}
+          focused={focused && !confirm && !renamingTrack}
+          reserveRows={confirm || renamingTrack ? 1 : 0}
           onDelete={(value) => {
             const t = library.get(value);
             if (t) setConfirm({ kind: "song", id: t.id, label: t.title });
@@ -345,6 +441,16 @@ export function Playlists() {
             <Text color={COLOR.warn} wrap="truncate-end">
               {confirmText()}
             </Text>
+          ) : renamingSet ? (
+            <>
+              <Text dimColor>{`${ICON.pointer} `}</Text>
+              <TextField
+                defaultValue={newPlaylistName}
+                placeholder="New playlist name…"
+                onChange={setNewPlaylistName}
+                onSubmit={handleRenameSubmit}
+              />
+            </>
           ) : (
             <>
               <Text dimColor>{`${ICON.pointer} `}</Text>

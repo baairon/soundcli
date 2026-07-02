@@ -64,14 +64,14 @@
     <text x="368" y="304" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Repeat</text>
     <rect x="756.1" y="288" width="1.4" height="22" fill="#ae664f"/>
     <rect x="45.7" y="310" width="1.4" height="22" fill="#ae664f"/>
-    <text x="60.8" y="326" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">tab</text>
-    <text x="166.4" y="326" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Switch pane</text>
+    <text x="60.8" y="326" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">t</text>
+    <text x="166.4" y="326" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Rename</text>
     <text x="300.8" y="326" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">s</text>
     <text x="368" y="326" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Shuffle</text>
     <rect x="756.1" y="310" width="1.4" height="22" fill="#ae664f"/>
     <rect x="45.7" y="332" width="1.4" height="22" fill="#ae664f"/>
-    <text x="60.8" y="348" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">esc</text>
-    <text x="166.4" y="348" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Back</text>
+    <text x="60.8" y="348" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">tab</text>
+    <text x="166.4" y="348" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Switch pane</text>
     <text x="300.8" y="348" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">+ -</text>
     <text x="368" y="348" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Volume</text>
     <rect x="756.1" y="332" width="1.4" height="22" fill="#ae664f"/>
