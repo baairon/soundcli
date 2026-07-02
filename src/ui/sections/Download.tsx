@@ -56,8 +56,11 @@ const SOURCES: {
   { id: "spotify", name: "Spotify", desc: "Your public playlists" },
 ];
 
+/** Sources whose handle prompt exists (not link-pasted or local files). */
+type HandleSource = Exclude<SourceId, "link" | "local">;
+
 const PROMPTS: Record<
-  Exclude<SourceId, "link">,
+  HandleSource,
   { title: string; hint: string; placeholder: string }
 > = {
   youtube: {
@@ -1179,7 +1182,7 @@ export function Download() {
   if (step.name === "need-handle") {
     // Generic links have no handle, so "link" never reaches this step; the
     // narrowing is structural only.
-    const p = PROMPTS[step.source as Exclude<SourceId, "link">];
+    const p = PROMPTS[step.source as HandleSource];
     return (
       <Box flexDirection="column">
         <PageIntro title={p.title} hint={p.hint} focused={focused} />

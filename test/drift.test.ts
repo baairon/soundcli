@@ -3,8 +3,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  displaySource,
   findDuplicates,
   indexAudioByBasename,
+  playlistFromPath,
+  titleFromFilename,
   trackSignature,
 } from "../src/library/drift";
 import type { Track } from "../src/library/types";
@@ -54,6 +57,78 @@ describe("findDuplicates", () => {
     ]);
     expect(dupes).toHaveLength(1);
     expect(dupes[0]!.tracks).toHaveLength(2);
+  });
+});
+
+describe("playlistFromPath", () => {
+  const lib = path.join(os.tmpdir(), "lib");
+  const p = (...segs: string[]) => path.join(lib, ...segs);
+
+  it("uses the immediate parent folder", () => {
+    expect(playlistFromPath(p("My Mix", "song.mp3"), lib)).toBe("My Mix");
+    expect(playlistFromPath(p("a", "Deep", "song.mp3"), lib)).toBe("Deep");
+  });
+  it("steps past the source root and its owner segment", () => {
+    expect(playlistFromPath(p("YouTube", "Chill", "s.mp3"), lib)).toBe("Chill");
+    expect(
+      playlistFromPath(p("YouTube", "someone", "Chill", "s.mp3"), lib, "someone"),
+    ).toBe("Chill");
+  });
+  it("treats the library root, source roots, and Singles as no playlist", () => {
+    expect(playlistFromPath(p("song.mp3"), lib)).toBeUndefined();
+    expect(playlistFromPath(p("YouTube", "song.mp3"), lib)).toBeUndefined();
+    expect(
+      playlistFromPath(p("YouTube", "Singles", "song.mp3"), lib),
+    ).toBeUndefined();
+  });
+  it("leaves files outside the library alone", () => {
+    expect(
+      playlistFromPath(path.join(os.tmpdir(), "x", "song.mp3"), lib),
+    ).toBeUndefined();
+  });
+});
+
+describe("displaySource", () => {
+  const lib = path.join(os.tmpdir(), "lib");
+  const at = (...segs: string[]) =>
+    track({ filePath: path.join(lib, ...segs) });
+
+  it("follows the top-level folder, not download provenance", () => {
+    expect(displaySource(at("YouTube", "Chill", "s.mp3"), lib)).toBe("youtube");
+    // A youtube download moved under SoundCloud/ re-tabs as soundcloud.
+    expect(displaySource(at("SoundCloud", "Chill", "s.mp3"), lib)).toBe(
+      "soundcloud",
+    );
+    expect(displaySource(at("Links", "s.mp3"), lib)).toBe("link");
+  });
+  it("reads unrecognized folders and the library root as local", () => {
+    expect(displaySource(at("My Mix", "s.mp3"), lib)).toBe("local");
+    expect(displaySource(at("s.mp3"), lib)).toBe("local");
+  });
+  it("falls back to provenance outside the library or without one", () => {
+    const outside = track({ filePath: path.join(os.tmpdir(), "x", "s.mp3") });
+    expect(displaySource(outside, lib)).toBe("youtube");
+    expect(displaySource(at("SoundCloud", "s.mp3"), undefined)).toBe("youtube");
+  });
+});
+
+describe("titleFromFilename", () => {
+  it("splits 'Artist - Title' the way downloads write it", () => {
+    expect(titleFromFilename("Lumen - Ember.mp3")).toEqual({
+      title: "Ember",
+      artist: "Lumen",
+    });
+  });
+  it("keeps later separators inside the title", () => {
+    expect(titleFromFilename("A - B - C.opus")).toEqual({
+      title: "B - C",
+      artist: "A",
+    });
+  });
+  it("falls back to the whole stem", () => {
+    expect(titleFromFilename("ambient loop.flac")).toEqual({
+      title: "ambient loop",
+    });
   });
 });
 
