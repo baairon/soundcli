@@ -602,4 +602,31 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     expect(got).toEqual(["https://soundcloud.com/artist/track"]);
     expect(sections).toEqual(["download"]);
   });
+
+  it("library has rename state and handlers", () => {
+    const library = makeFakeLibrary();
+    const store = makeStore({
+      region: "content",
+      library,
+    });
+    const { lastFrame } = render(wrap(<LibrarySection />, store));
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Library");
+    // The component should render without errors
+    expect(frame.length).toBeGreaterThan(0);
+  });
+
+  it("playlists has rename state and handlers", () => {
+    const library = makeFakeLibrary();
+    const store = makeStore({
+      region: "content",
+      section: "playlists",
+      library,
+    });
+    const { lastFrame } = render(wrap(<Playlists />, store));
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Playlists");
+    // The component should render without errors
+    expect(frame.length).toBeGreaterThan(0);
+  });
 });

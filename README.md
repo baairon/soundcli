@@ -32,7 +32,7 @@ Then it asks where your music comes from. Pick **YouTube**, **SoundCloud**, or *
 
 Every track downloads in its original quality, with album artwork and artist details included, and gets sorted into folders automatically so your collection stays organized. Almost any link works: playlists, albums, artist profiles, your likes, or a single song. Public Spotify playlists and albums work without signing in.
 
-It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. Once a track is saved, it's there for good.
+It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. Once a track is saved, it's there for good. You can rename tracks and playlists directly from the interface to keep everything tidy.
 
 ## Playing it back
 

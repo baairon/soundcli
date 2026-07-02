@@ -41,6 +41,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       { keys: "1-5", label: "Jump section" },
       { keys: "/", label: "Search" },
       { keys: "d", label: "Delete" },
+      { keys: "t", label: "Rename" },
       { keys: "tab", label: "Switch pane" },
       { keys: "esc", label: "Back" },
       { keys: "q", label: "Quit" },
@@ -110,6 +111,7 @@ export function footerHints(
           { keys: "↵", label: "Play" },
           { keys: "/", label: "Search" },
           { keys: "d", label: "Delete" },
+          { keys: "t", label: "Rename" },
           { keys: "esc", label: "Back" },
           ALWAYS,
         ];
@@ -119,6 +121,7 @@ export function footerHints(
         { keys: "/", label: "Search" },
         { keys: "[ ]", label: "Source" },
         { keys: "d", label: "Delete" },
+        { keys: "t", label: "Rename" },
         ALWAYS,
       ];
     case "history":
@@ -135,6 +138,7 @@ export function footerHints(
         { keys: "/", label: "Search" },
         { keys: "[ ]", label: "Source" },
         { keys: "d", label: "Delete" },
+        { keys: "t", label: "Rename" },
         { keys: "esc", label: "Back" },
         ALWAYS,
       ];
