@@ -1,4 +1,4 @@
-export type SourceId = "youtube" | "soundcloud" | "spotify" | "link";
+export type SourceId = "youtube" | "soundcloud" | "spotify" | "link" | "local";
 
 /** Human label and top-level library folder name per source. */
 export const SOURCE_LABELS: Record<SourceId, string> = {
@@ -6,6 +6,9 @@ export const SOURCE_LABELS: Record<SourceId, string> = {
   soundcloud: "SoundCloud",
   spotify: "Spotify",
   link: "Links",
+  // Audio the user dropped into the library folder themselves; adopted by the
+  // reconcile rescan rather than written by a download.
+  local: "Local",
 };
 
 /**

@@ -123,18 +123,16 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   );
 
   // Fit the whole layout inside the terminal so content never gets clipped.
-  // Below ~20 rows we go "compact": shed the wordmark (but keep the thin top
-  // rule as a header divider), the footer hint bar (the `?` cheatsheet still has
-  // every key), and the body's top margin, and sections drop their idle search
-  // hint, so every freed row goes to the song list. The now-playing divider
-  // holds until even shorter terminals force it out.
+  // Below ~20 rows we go "compact": shed the footer hint bar (the `?`
+  // cheatsheet still has every key) and the body's top margin, and sections
+  // drop their idle search hint, so every freed row goes to the song list. The
+  // now-playing divider holds until even shorter terminals force it out.
   const compact = rows < 20;
-  // The block wordmark is decoration: shown only when there's room to spare (not
-  // compact) and the terminal is wide enough; otherwise no logo (no text
-  // fallback), reserving a row only for the transient mpv line. The thin top
-  // rule stays in compact as a header divider in place of the wordmark, and sits
-  // under the wordmark when it shows.
-  const showLogo = !compact && cols >= 34;
+  // The block wordmark stays in every height, compact included, so the app
+  // never reads as bare chrome; it's width-gated only. Below 34 cols there is
+  // no logo (no text fallback), reserving a row only for the transient mpv
+  // line, and the thin top rule alone marks the header.
+  const showLogo = cols >= 34;
   const showTopRule = compact || showLogo;
   const showDivider = rows >= 12;
   const showFooter = !compact;
@@ -292,11 +290,11 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   );
 
   // Keep the library in step with disk without a restart: re-link files the
-  // user moved or reorganized inside the library folder, prune real deletions,
-  // and dedupe. Runs when landing on a library-backed section, guarded so runs
-  // never stack and coalesced so rapid tab-hops don't restat. Cheap when nothing
-  // drifted: the folder rescan only happens when a track's file actually goes
-  // missing.
+  // user moved or reorganized inside the library folder, adopt hand-added
+  // audio, prune real deletions, and dedupe. Runs when landing on a
+  // library-backed section, guarded so runs never stack and coalesced so rapid
+  // tab-hops don't restat. The folder rescan is readdir-only, so a run that
+  // finds no drift stays cheap.
   const reconciling = useRef(false);
   const lastReconcile = useRef(0);
   const runReconcile = useCallback(() => {

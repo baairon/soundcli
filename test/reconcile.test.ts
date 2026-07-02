@@ -85,6 +85,7 @@ describe("reconcileLibrary", () => {
       mergedDuplicates: 0,
       deletedFiles: 0,
       relinked: 0,
+      adopted: 0,
     });
     expect(library.all()).toHaveLength(1);
 
@@ -177,6 +178,130 @@ describe("reconcileLibrary", () => {
 
     expect(r.relinked).toBe(0);
     expect(r.prunedMissing).toBe(1);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("adopts a hand-added file as a local track grouped by its folder", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-adopt-"));
+    const f = path.join(dir, "My Mix", "Flume - Say It.mp3");
+    await fs.mkdir(path.dirname(f), { recursive: true });
+    await fs.writeFile(f, "audio");
+
+    const library = fakeLibrary([]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.adopted).toBe(1);
+    const t = library.all()[0]!;
+    expect(t.source).toBe("local");
+    expect(t.title).toBe("Say It");
+    expect(t.artist).toBe("Flume");
+    expect(t.playlist).toBe("My Mix");
+    expect(t.filePath).toBe(f);
+    expect(t.fileSize).toBe(5);
+
+    // A second run adopts nothing new: the entry claims its file.
+    const again = await reconcileLibrary(library, undefined, dir);
+    expect(again.adopted).toBe(0);
+    expect(library.all()).toHaveLength(1);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("never adopts a file a download already claims", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-claimed-"));
+    const f = path.join(dir, "song.mp3");
+    await fs.writeFile(f, "audio");
+
+    const library = fakeLibrary([track({ id: "youtube:a", filePath: f })]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.adopted).toBe(0);
+    expect(library.all().map((t) => t.id)).toEqual(["youtube:a"]);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("drops a local shadow once a download lands on the same file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-shadow-"));
+    const f = path.join(dir, "song.mp3");
+    await fs.writeFile(f, "audio");
+
+    const library = fakeLibrary([
+      track({ id: "local:song.mp3", source: "local", filePath: f }),
+      track({ id: "youtube:a", filePath: f }),
+    ]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.adopted).toBe(0);
+    expect(library.all().map((t) => t.id)).toEqual(["youtube:a"]);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("never dedupe-deletes hand-added files, even twins", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-twins-"));
+    const a = path.join(dir, "one", "Flume - Say It.mp3");
+    const b = path.join(dir, "two", "Flume - Say It.mp3");
+    for (const f of [a, b]) {
+      await fs.mkdir(path.dirname(f), { recursive: true });
+      await fs.writeFile(f, "audio");
+    }
+
+    const library = fakeLibrary([]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    // Both adopted; the duplicate pass leaves user files alone.
+    expect(r.adopted).toBe(2);
+    expect(r.mergedDuplicates).toBe(0);
+    expect(r.deletedFiles).toBe(0);
+    await expect(fs.access(a)).resolves.toBeUndefined();
+    await expect(fs.access(b)).resolves.toBeUndefined();
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("follows a hand-added track moved to another folder", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-lmove-"));
+    const before = path.join(dir, "Focus", "song.mp3");
+    await fs.mkdir(path.dirname(before), { recursive: true });
+    await fs.writeFile(before, "audio");
+
+    const library = fakeLibrary([]);
+    await reconcileLibrary(library, undefined, dir);
+    expect(library.all()[0]!.playlist).toBe("Focus");
+
+    // Move it in a file manager; the entry follows instead of duplicating.
+    const after = path.join(dir, "Sleep", "song.mp3");
+    await fs.mkdir(path.dirname(after), { recursive: true });
+    await fs.rename(before, after);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.relinked).toBe(1);
+    expect(r.adopted).toBe(0);
+    expect(library.all()).toHaveLength(1);
+    expect(library.all()[0]!.filePath).toBe(after);
+    expect(library.all()[0]!.playlist).toBe("Sleep");
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("re-sorts a re-linked track under its new folder's playlist", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-resort-"));
+    const moved = path.join(dir, "Chillwave", "song.mp3");
+    await fs.mkdir(path.dirname(moved), { recursive: true });
+    await fs.writeFile(moved, "audio");
+    // The index still has the old folder (renamed on disk) and its old name.
+    const stale = path.join(dir, "Chill", "song.mp3");
+
+    const library = fakeLibrary([
+      track({ id: "youtube:a", filePath: stale, playlist: "Chill" }),
+    ]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.relinked).toBe(1);
+    expect(library.all()[0]!.filePath).toBe(moved);
+    expect(library.all()[0]!.playlist).toBe("Chillwave");
 
     await fs.rm(dir, { recursive: true, force: true });
   });
