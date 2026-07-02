@@ -11,6 +11,8 @@ import { cleanText, formatDuration } from "../../util/format";
 import { deleteTracks } from "../../library/delete";
 import { displaySource } from "../../library/drift";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 const SOURCE_ORDER: SourceId[] = [
   "youtube",
@@ -62,6 +64,10 @@ export function Library() {
   const [confirm, setConfirm] = useState<{ id: string; title: string } | null>(
     null,
   );
+  // Pending track rename.
+  const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
+  const [newTrackTitle, setNewTrackTitle] = useState("");
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
 
   const songs = useMemo(
     // library.all() is already newest-first (addedAt desc); recompute on new
@@ -117,12 +123,13 @@ export function Library() {
 
   // Take over the keyboard only while typing in the search box; a pending
   // delete confirm owns esc so the global one doesn't bounce to the sidebar.
+  const renaming = focused && renamingTrackId !== null;
   useEffect(() => {
     setCaptureMode(
-      focused && editing ? "text" : focused && confirm ? "esc" : "none",
+      editing ? "text" : confirm ? "esc" : renaming ? "text" : "none",
     );
     return () => setCaptureMode("none");
-  }, [focused, editing, confirm, setCaptureMode]);
+  }, [focused, editing, confirm, renaming, setCaptureMode]);
 
   // Consume the global "/" intent: arrive with the search box already open.
   useEffect(() => {
@@ -135,10 +142,19 @@ export function Library() {
   // Browsing keys:
   //   "/" opens search
   //   "[" / "]" step the source tabs
+  //   "t" renames the selected track
   useInput(
     (input) => {
       if (input === "/") {
         setEditing(true);
+        return;
+      }
+      if (input === "t" && !editing && !confirm && selectedTrackId) {
+        const track = library.get(selectedTrackId);
+        if (track) {
+          setRenamingTrackId(track.id);
+          setNewTrackTitle(track.title);
+        }
         return;
       }
       if (input === "[" || input === "]") {
@@ -147,7 +163,7 @@ export function Library() {
         setFilter(tabs[(i + dir + tabs.length) % tabs.length]!);
       }
     },
-    { isActive: focused && !editing && !confirm },
+    { isActive: focused && !editing && !confirm && !renaming },
   );
 
   // esc closes the search box (back to browsing), without leaving the section.
@@ -157,6 +173,47 @@ export function Library() {
     },
     { isActive: focused && editing },
   );
+
+  // esc cancels rename.
+  useInput(
+    (_input, key) => {
+      if (key.escape) {
+        setRenamingTrackId(null);
+        setNewTrackTitle("");
+      }
+    },
+    { isActive: renaming },
+  );
+
+  const handleRenameSubmit = async () => {
+    if (!renamingTrackId || !newTrackTitle.trim()) return;
+    const track = library.get(renamingTrackId);
+    if (!track) return;
+    const newTitle = newTrackTitle.trim();
+    if (track.title === newTitle) {
+      setRenamingTrackId(null);
+      setNewTrackTitle("");
+      return;
+    }
+
+    // Move the file on disk to match the new title
+    const oldPath = track.filePath;
+    const oldDir = path.dirname(oldPath);
+    const oldExt = path.extname(oldPath);
+    const newPath = path.join(oldDir, `${cleanText(newTitle)}${oldExt}`);
+
+    try {
+      await fs.rename(oldPath, newPath);
+      await library.upsert({ ...track, title: newTitle, filePath: newPath });
+    } catch (e) {
+      console.error("Failed to rename file:", e);
+      // Still update metadata even if file move failed
+      await library.upsert({ ...track, title: newTitle });
+    }
+
+    setRenamingTrackId(null);
+    setNewTrackTitle("");
+  };
 
   // y commits the pending delete, esc keeps the song. Playback stops first
   // when it's the one playing: the player holds the file handle open and
@@ -250,6 +307,16 @@ export function Library() {
             <Text color={COLOR.warn} wrap="truncate-end">
               {`Delete '${cleanText(confirm.title)}'?  y Delete  ${ICON.dot}  esc Keep`}
             </Text>
+          ) : renaming ? (
+            <>
+              <Text dimColor>{`${ICON.pointer} `}</Text>
+              <TextField
+                defaultValue={newTrackTitle}
+                placeholder="New title…"
+                onChange={setNewTrackTitle}
+                onSubmit={handleRenameSubmit}
+              />
+            </>
           ) : (
             <>
               <Text dimColor>{`${ICON.pointer} `}</Text>
@@ -290,6 +357,7 @@ export function Library() {
             const t = library.get(value);
             if (t) playTrack(t, visible);
           }}
+          getSelectedValue={setSelectedTrackId}
         />
       )}
     </Box>
