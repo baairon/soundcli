@@ -11,6 +11,8 @@ import { cleanText, formatDuration, formatRuntime } from "../../util/format";
 import { deleteTracks } from "../../library/delete";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
 import { shuffledOrder } from "../../player/order";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 const SOURCE_ORDER: SourceId[] = ["youtube", "soundcloud", "spotify", "link"];
 
@@ -61,6 +63,8 @@ export function Playlists() {
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [newTrackTitle, setNewTrackTitle] = useState("");
+  const [selectedSetKey, setSelectedSetKey] = useState<string | null>(null);
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
 
   const songs = useMemo(
     // library.all() is already newest-first; recompute on new downloads and
@@ -186,11 +190,11 @@ export function Playlists() {
 
   useInput(
     (input) => {
-      if (input === "t" && !confirm && active) {
-        const firstTrack = active.tracks.length > 0 ? active.tracks[0] : null;
-        if (firstTrack) {
-          setRenamingTrackId(firstTrack.id);
-          setNewTrackTitle(firstTrack.title);
+      if (input === "t" && !confirm && selectedTrackId) {
+        const track = library.get(selectedTrackId);
+        if (track) {
+          setRenamingTrackId(track.id);
+          setNewTrackTitle(track.title);
         }
         return;
       }
@@ -218,7 +222,22 @@ export function Playlists() {
       setNewTrackTitle("");
       return;
     }
-    await library.upsert({ ...track, title: newTitle });
+
+    // Move the file on disk to match the new title
+    const oldPath = track.filePath;
+    const oldDir = path.dirname(oldPath);
+    const oldExt = path.extname(oldPath);
+    const newPath = path.join(oldDir, `${cleanText(newTitle)}${oldExt}`);
+
+    try {
+      await fs.rename(oldPath, newPath);
+      await library.upsert({ ...track, title: newTitle, filePath: newPath });
+    } catch (e) {
+      console.error("Failed to rename file:", e);
+      // Still update metadata even if file move failed
+      await library.upsert({ ...track, title: newTitle });
+    }
+
     setRenamingTrackId(null);
     setNewTrackTitle("");
   };
@@ -229,8 +248,8 @@ export function Playlists() {
         setFiltering(true);
         return;
       }
-      if (input === "t" && !filtering && !confirm) {
-        const selectedSet = visibleSets.length > 0 ? visibleSets[0] : null;
+      if (input === "t" && !filtering && !confirm && selectedSetKey) {
+        const selectedSet = sets.find((s) => s.key === selectedSetKey);
         if (selectedSet) {
           setRenamingSetKey(selectedSet.key);
           setNewPlaylistName(selectedSet.name);
@@ -271,10 +290,41 @@ export function Playlists() {
       setNewPlaylistName("");
       return;
     }
-    const tracksToUpdate = targetSet.tracks.map((t) => ({
-      ...t,
-      playlist: newName,
-    }));
+
+    // Move the folder on disk for each track
+    const tracksToUpdate = [];
+    for (const track of targetSet.tracks) {
+      const oldPath = track.filePath;
+      const oldDir = path.dirname(oldPath);
+      const oldBaseName = path.basename(oldPath, path.extname(oldPath));
+      const oldExt = path.extname(oldPath);
+      
+      // The folder structure is: libraryDir/source/owner/playlist/filename
+      // We need to rename the playlist folder
+      const pathParts = oldDir.split(path.sep);
+      const playlistIndex = pathParts.findIndex((p) => p === cleanText(oldName));
+      
+      if (playlistIndex >= 0) {
+        pathParts[playlistIndex] = cleanText(newName);
+        const newDir = pathParts.join(path.sep);
+        const newPath = path.join(newDir, `${oldBaseName}${oldExt}`);
+        
+        try {
+          // Create new directory if it doesn't exist
+          await fs.mkdir(newDir, { recursive: true });
+          await fs.rename(oldPath, newPath);
+          tracksToUpdate.push({ ...track, playlist: newName, filePath: newPath });
+        } catch (e) {
+          console.error(`Failed to move file for ${track.title}:`, e);
+          // Still update metadata even if file move failed
+          tracksToUpdate.push({ ...track, playlist: newName });
+        }
+      } else {
+        // Fallback: just update metadata
+        tracksToUpdate.push({ ...track, playlist: newName });
+      }
+    }
+
     await library.upsertMany(tracksToUpdate);
     setRenamingSetKey(null);
     setNewPlaylistName("");
@@ -397,6 +447,7 @@ export function Playlists() {
             const t = library.get(value);
             if (t) playTrack(t, active.tracks);
           }}
+          getSelectedValue={setSelectedTrackId}
         />
       </Box>
     );
@@ -491,6 +542,7 @@ export function Playlists() {
               });
           }}
           onSelect={(value) => setView({ kind: "songs", setKey: value })}
+          getSelectedValue={setSelectedSetKey}
         />
       )}
     </Box>
