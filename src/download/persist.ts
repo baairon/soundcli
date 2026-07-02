@@ -20,6 +20,8 @@ export interface PersistedItem {
 interface QueueSnapshot {
   version: 1;
   items: PersistedItem[];
+  /** Per-source batch counts to resume rate limiting after restart. */
+  perSourceCounts?: Record<string, number>;
 }
 
 /**
@@ -72,8 +74,12 @@ export function restorableItems(
   );
 }
 
-export async function saveQueue(items: QueueItem[]): Promise<void> {
-  const snapshot: QueueSnapshot = { version: 1, items: snapshotItems(items) };
+export async function saveQueue(items: QueueItem[], perSourceCounts?: Map<string, number>): Promise<void> {
+  const snapshot: QueueSnapshot = {
+    version: 1,
+    items: snapshotItems(items),
+    perSourceCounts: perSourceCounts ? Object.fromEntries(perSourceCounts) : undefined,
+  };
   await fs.mkdir(path.dirname(queueFile), { recursive: true });
   const tmp = `${queueFile}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(snapshot, null, 2), "utf8");
@@ -81,21 +87,28 @@ export async function saveQueue(items: QueueItem[]): Promise<void> {
 }
 
 /** Synchronous save for app quit, so a partial download survives even on exit. */
-export function saveQueueSync(items: QueueItem[]): void {
-  const snapshot: QueueSnapshot = { version: 1, items: snapshotItems(items) };
+export function saveQueueSync(items: QueueItem[], perSourceCounts?: Map<string, number>): void {
+  const snapshot: QueueSnapshot = {
+    version: 1,
+    items: snapshotItems(items),
+    perSourceCounts: perSourceCounts ? Object.fromEntries(perSourceCounts) : undefined,
+  };
   mkdirSync(path.dirname(queueFile), { recursive: true });
   writeFileSync(queueFile, JSON.stringify(snapshot, null, 2), "utf8");
 }
 
-export async function loadQueue(): Promise<PersistedItem[]> {
+export async function loadQueue(): Promise<{ items: PersistedItem[]; perSourceCounts: Record<string, number> }> {
   try {
     const raw = await fs.readFile(queueFile, "utf8");
     const parsed = JSON.parse(raw) as QueueSnapshot;
     if (parsed && parsed.version === 1 && Array.isArray(parsed.items)) {
-      return parsed.items;
+      return {
+        items: parsed.items,
+        perSourceCounts: parsed.perSourceCounts ?? {},
+      };
     }
   } catch {
     // missing or invalid: nothing to restore
   }
-  return [];
+  return { items: [], perSourceCounts: {} };
 }

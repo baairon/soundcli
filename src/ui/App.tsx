@@ -248,8 +248,9 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
         ensureFfmpeg(),
       );
       // Bring back last session's queue; pending items resume from their .part.
-      queue.restore(await loadQueue());
-      
+      const { items, perSourceCounts } = await loadQueue();
+      queue.restore(items, perSourceCounts);
+
       // Auto-resume any sources whose scheduled resume time has arrived
       await queue.checkScheduledResumes();
 

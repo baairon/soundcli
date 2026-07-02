@@ -237,7 +237,7 @@ export class DownloadQueue extends EventEmitter {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void saveQueue(this.items).catch(() => {});
+      void saveQueue(this.items, this.perSourceCounts).catch(() => {});
     }, 300);
   }
 
@@ -533,7 +533,7 @@ export class DownloadQueue extends EventEmitter {
   }
 
   /** Restore a persisted queue from a previous session. */
-  restore(persisted: PersistedItem[]): void {
+  restore(persisted: PersistedItem[], perSourceCounts?: Record<string, number>): void {
     for (const p of restorableItems(persisted, this.library)) {
       this.items.push({
         id: `q${++counter}`,
@@ -544,6 +544,12 @@ export class DownloadQueue extends EventEmitter {
         percent: 0,
         unverifiedMatch: p.unverifiedMatch,
       });
+    }
+    // Restore per-source batch counts
+    if (perSourceCounts) {
+      for (const [source, count] of Object.entries(perSourceCounts)) {
+        this.perSourceCounts.set(source as SourceId, count);
+      }
     }
     this.emit("update");
     this.pump();
@@ -557,7 +563,7 @@ export class DownloadQueue extends EventEmitter {
     this.stopped = true;
     for (const c of this.controllers.values()) c.abort();
     try {
-      saveQueueSync(this.items);
+      saveQueueSync(this.items, this.perSourceCounts);
     } catch {
       // best effort on exit
     }
