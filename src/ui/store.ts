@@ -13,7 +13,6 @@ export type Section =
   | "playlists"
   | "history"
   | "download"
-  | "progress"
   | "settings";
 
 /**

@@ -21,13 +21,12 @@ const SECTION_ORDER: Section[] = [
   "playlists",
   "history",
   "download",
-  "progress",
   "settings",
 ];
 
-/** Map "1".."6" to its section (the sidebar's display order); null otherwise. */
+/** Map "1".."5" to its section (the sidebar's display order); null otherwise. */
 export function sectionForDigit(input: string): Section | null {
-  if (!/^[1-6]$/.test(input)) return null;
+  if (!/^[1-5]$/.test(input)) return null;
   return SECTION_ORDER[Number(input) - 1] ?? null;
 }
 
@@ -102,12 +101,6 @@ export function footerHints(
       // Download explains ↵ contextually in-section (choose / pause-resume), so
       // the footer stays neutral and never contradicts the in-list legend.
       return [
-        { keys: "esc", label: "Back" },
-        ALWAYS,
-      ];
-    case "progress":
-      return [
-        { keys: "r", label: "Resume now" },
         { keys: "esc", label: "Back" },
         ALWAYS,
       ];
