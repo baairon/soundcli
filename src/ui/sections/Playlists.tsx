@@ -9,10 +9,17 @@ import { SongList, type SongGroup } from "../components/SongList";
 import { COLOR, ICON } from "../theme";
 import { cleanText, formatDuration, formatRuntime } from "../../util/format";
 import { deleteTracks } from "../../library/delete";
+import { displaySource } from "../../library/drift";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
 import { shuffledOrder } from "../../player/order";
 
-const SOURCE_ORDER: SourceId[] = ["youtube", "soundcloud", "spotify", "link"];
+const SOURCE_ORDER: SourceId[] = [
+  "youtube",
+  "soundcloud",
+  "spotify",
+  "link",
+  "local",
+];
 
 interface SetInfo {
   key: string;
@@ -57,6 +64,9 @@ export function Playlists() {
   const [q, setQ] = useState("");
   const [filtering, setFiltering] = useState(false);
   const [filter, setFilter] = useState<SourceFilter>("all");
+  // Search inside the open set, mirroring the Library search box.
+  const [songQ, setSongQ] = useState("");
+  const [songFiltering, setSongFiltering] = useState(false);
 
   const songs = useMemo(
     // library.all() is already newest-first; recompute on new downloads and
@@ -67,16 +77,19 @@ export function Playlists() {
   );
 
   // Bucket tracks into sets, preserving first-appearance (newest-first) order.
+  // Sets group under the top-level folder their files sit in (like the
+  // Library tabs), so re-sorting on disk re-homes them here too.
   const sets = useMemo(() => {
     const byKey = new Map<string, SetInfo>();
     const ordered: SetInfo[] = [];
     for (const t of songs) {
-      const key = `${t.source}|${t.owner ?? ""}|${t.playlist ?? "Other"}`;
+      const src = displaySource(t, config.libraryDir);
+      const key = `${src}|${t.owner ?? ""}|${t.playlist ?? "Other"}`;
       let s = byKey.get(key);
       if (!s) {
         s = {
           key,
-          source: t.source,
+          source: src,
           owner: t.owner,
           name: t.playlist ?? "Other",
           tracks: [],
@@ -87,7 +100,7 @@ export function Playlists() {
       s.tracks.push(t);
     }
     return ordered;
-  }, [songs]);
+  }, [songs, config.libraryDir]);
 
   const searching = q.trim().length > 0;
   const qLower = q.toLowerCase();
@@ -136,6 +149,13 @@ export function Playlists() {
     if (view.kind === "songs" && !active) setView({ kind: "sets" });
   }, [view, active]);
 
+  // A fresh drill-down starts unfiltered.
+  const activeKey = view.kind === "songs" ? view.setKey : undefined;
+  useEffect(() => {
+    setSongQ("");
+    setSongFiltering(false);
+  }, [activeKey]);
+
   useEffect(() => {
     setPlaylistsDepth(view.kind === "songs" ? "songs" : "sets");
     return () => setPlaylistsDepth("sets");
@@ -145,22 +165,23 @@ export function Playlists() {
   const inSets = focused && view.kind === "sets";
   const confirming = focused && confirm !== null;
   const filteringSets = inSets && filtering;
+  const filteringSongs = inSongs && songFiltering;
   useEffect(() => {
     // The sets list claims no special mode: like Library, a plain esc falls
     // through to the global handler and returns focus to the sidebar. Only the
-    // filter box (text) and the songs drill-down / delete confirm (esc, each
+    // search boxes (text) and the songs drill-down / delete confirm (esc, each
     // with its own handler) capture keys. ("picker" would swallow esc here.)
     setCaptureMode(
       confirming
         ? "esc"
-        : filteringSets
+        : filteringSets || filteringSongs
           ? "text"
           : inSongs
             ? "esc"
             : "none",
     );
     return () => setCaptureMode("none");
-  }, [confirming, filteringSets, inSongs, setCaptureMode]);
+  }, [confirming, filteringSets, filteringSongs, inSongs, setCaptureMode]);
 
   function stepSourceTab(dir: -1 | 1): void {
     const i = tabs.indexOf(filter);
@@ -168,10 +189,19 @@ export function Playlists() {
   }
 
   useInput(
-    (_input, key) => {
+    (input, key) => {
       if (key.escape) setView({ kind: "sets" });
+      else if (input === "/") setSongFiltering(true);
     },
-    { isActive: inSongs && !confirm },
+    { isActive: inSongs && !confirm && !songFiltering },
+  );
+
+  // esc closes the in-set search box (back to browsing), keeping the query.
+  useInput(
+    (_input, key) => {
+      if (key.escape) setSongFiltering(false);
+    },
+    { isActive: inSongs && songFiltering },
   );
 
   useInput(
@@ -253,6 +283,17 @@ export function Playlists() {
     ]
       .filter(Boolean)
       .join(`  ${ICON.dot}  `);
+    // Songs narrowed to the in-set search; play/shuffle scope to the matches.
+    const sq = songQ.trim().toLowerCase();
+    const shown = sq
+      ? active.tracks.filter(
+          (t) =>
+            t.title.toLowerCase().includes(sq) ||
+            (t.artist?.toLowerCase().includes(sq) ?? false),
+        )
+      : active.tracks;
+    const sn = shown.length;
+    const showSongSearchRow = songFiltering || sq.length > 0;
     return (
       <Box flexDirection="column">
         <Header title={setLabel(active)} subtitle={subtitle} focused={focused} />
@@ -262,46 +303,68 @@ export function Playlists() {
               {confirmText()}
             </Text>
           </Box>
+        ) : showSongSearchRow ? (
+          <Box marginBottom={compact ? 0 : 1} flexShrink={0}>
+            <Text dimColor>{`${ICON.pointer} `}</Text>
+            {focused && songFiltering ? (
+              <TextField
+                defaultValue={songQ}
+                placeholder="Search this playlist…"
+                onChange={setSongQ}
+                onSubmit={() => setSongFiltering(false)}
+              />
+            ) : (
+              <Box flexGrow={1} minWidth={0}>
+                <Text dimColor wrap="truncate-end">
+                  {songQ}
+                </Text>
+              </Box>
+            )}
+          </Box>
         ) : null}
-        <SongList
-          key={active.key}
-          groups={[
-            {
-              items: active.tracks.map((t) => ({
-                value: t.id,
-                title: t.title,
-                artist: t.artist,
-                meta: formatDuration(t.durationSec),
-              })),
-            },
-          ]}
-          action={
-            n > 1
-              ? {
-                  value: "__shuffle__",
-                  label: `${ICON.shuffle} Shuffle`,
-                }
-              : undefined
-          }
-          numbered
-          actionGap={n > 1}
-          playingId={playingId}
-          focused={focused && !confirm}
-          reserveRows={confirm ? 1 : 0}
-          onDelete={(value) => {
-            const t = library.get(value);
-            if (t) setConfirm({ kind: "song", id: t.id, label: t.title });
-          }}
-          onSelect={(value) => {
-            if (value === "__shuffle__") {
-              const list = shuffledOrder(n, -1).map((i) => active.tracks[i]!);
-              if (list.length > 0) playTrack(list[0]!, list);
-              return;
+        {sq && sn === 0 ? (
+          <Text dimColor>No matches.</Text>
+        ) : (
+          <SongList
+            key={active.key}
+            groups={[
+              {
+                items: shown.map((t) => ({
+                  value: t.id,
+                  title: t.title,
+                  artist: t.artist,
+                  meta: formatDuration(t.durationSec),
+                })),
+              },
+            ]}
+            action={
+              sn > 1
+                ? {
+                    value: "__shuffle__",
+                    label: `${ICON.shuffle} Shuffle`,
+                  }
+                : undefined
             }
-            const t = library.get(value);
-            if (t) playTrack(t, active.tracks);
-          }}
-        />
+            numbered
+            actionGap={sn > 1}
+            playingId={playingId}
+            focused={focused && !confirm && !songFiltering}
+            reserveRows={confirm || showSongSearchRow ? 1 : 0}
+            onDelete={(value) => {
+              const t = library.get(value);
+              if (t) setConfirm({ kind: "song", id: t.id, label: t.title });
+            }}
+            onSelect={(value) => {
+              if (value === "__shuffle__") {
+                const list = shuffledOrder(sn, -1).map((i) => shown[i]!);
+                if (list.length > 0) playTrack(list[0]!, list);
+                return;
+              }
+              const t = library.get(value);
+              if (t) playTrack(t, shown);
+            }}
+          />
+        )}
       </Box>
     );
   }

@@ -9,9 +9,16 @@ import { SongList } from "../components/SongList";
 import { COLOR, ICON } from "../theme";
 import { cleanText, formatDuration } from "../../util/format";
 import { deleteTracks } from "../../library/delete";
+import { displaySource } from "../../library/drift";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
 
-const SOURCE_ORDER: SourceId[] = ["youtube", "soundcloud", "spotify", "link"];
+const SOURCE_ORDER: SourceId[] = [
+  "youtube",
+  "soundcloud",
+  "spotify",
+  "link",
+  "local",
+];
 
 /**
  * Recently played, newest first. Replays float a track back to the top
@@ -60,11 +67,18 @@ export function History() {
     [history, histVersion, library, libVersion],
   );
 
+  // Tabs group by where each file sits on disk, matching the Library.
+  const srcOf = useMemo(() => {
+    const m = new Map<string, SourceId>();
+    for (const t of tracks) m.set(t.id, displaySource(t, config.libraryDir));
+    return (t: Track): SourceId => m.get(t.id) ?? t.source;
+  }, [tracks, config.libraryDir]);
+
   // Sources present in the history, in canonical order, for the filter tabs.
   const presentSources = useMemo(() => {
-    const set = new Set(tracks.map((t) => t.source));
+    const set = new Set(tracks.map(srcOf));
     return SOURCE_ORDER.filter((s) => set.has(s));
-  }, [tracks]);
+  }, [tracks, srcOf]);
   const tabs = useMemo<SourceFilter[]>(
     () => ["all", ...presentSources],
     [presentSources],
@@ -73,9 +87,12 @@ export function History() {
   // Per-source totals beside each tab; counts reflect the whole history.
   const countBySource = useMemo(() => {
     const m = new Map<SourceId, number>();
-    for (const t of tracks) m.set(t.source, (m.get(t.source) ?? 0) + 1);
+    for (const t of tracks) {
+      const s = srcOf(t);
+      m.set(s, (m.get(s) ?? 0) + 1);
+    }
     return m;
-  }, [tracks]);
+  }, [tracks, srcOf]);
   const tabCount = (tb: SourceFilter): number =>
     tb === "all" ? tracks.length : countBySource.get(tb) ?? 0;
 
@@ -85,7 +102,7 @@ export function History() {
   }, [filter, presentSources]);
 
   const inSource =
-    filter === "all" ? tracks : tracks.filter((t) => t.source === filter);
+    filter === "all" ? tracks : tracks.filter((t) => srcOf(t) === filter);
   const qLower = q.toLowerCase();
   const visible = searching
     ? inSource.filter((t) =>

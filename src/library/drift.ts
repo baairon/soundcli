@@ -1,7 +1,8 @@
 import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
-import type { Track } from "./types";
+import { SOURCE_LABELS, type SourceId, type Track } from "./types";
 import { cleanText } from "../util/format";
+import { sanitizeName } from "../ytdlp/args";
 
 /** A set of library entries that are all the same song. */
 export interface DuplicateGroup {
@@ -109,6 +110,74 @@ export async function indexAudioByBasename(
   };
   await walk(dir);
   return byBasename;
+}
+
+const SOURCE_BY_FOLDER = new Map<string, SourceId>(
+  (Object.entries(SOURCE_LABELS) as [SourceId, string][]).map(
+    ([id, label]) => [label, id],
+  ),
+);
+
+/**
+ * The tab a track displays under: the top-level source folder its file sits
+ * in, so the visible grouping follows the file manager like playlists do.
+ * Anything under an unrecognized folder, or loose at the library root, reads
+ * as "local"; a file living outside the library keeps its download
+ * provenance. Display-only: `track.source` (identity, dedupe scope) never
+ * changes.
+ */
+export function displaySource(
+  t: Track,
+  libraryDir: string | undefined,
+): SourceId {
+  if (!libraryDir) return t.source;
+  const rel = path.relative(libraryDir, t.filePath);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return t.source;
+  const segs = rel.split(path.sep);
+  if (segs.length < 2) return "local"; // loose at the library root
+  return SOURCE_BY_FOLDER.get(segs[0]!) ?? "local";
+}
+
+/**
+ * The playlist a file's location implies, so on-disk organization is the
+ * source of truth for grouping: the immediate parent folder's name, after
+ * stepping past the source root (YouTube, SoundCloud, …) and its owner
+ * segment. "Singles" mirrors the download layout's no-playlist folder, and a
+ * file sitting at the library root or a source root has no playlist. Assumes
+ * `filePath` is inside `libraryDir` (both relink and adoption guarantee it).
+ */
+export function playlistFromPath(
+  filePath: string,
+  libraryDir: string,
+  owner?: string,
+): string | undefined {
+  const rel = path.relative(libraryDir, filePath);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
+  const segs = rel.split(path.sep).slice(0, -1);
+  if (segs[0] !== undefined && SOURCE_BY_FOLDER.has(segs[0])) segs.shift();
+  if (owner && segs[0] === sanitizeName(owner)) segs.shift();
+  const parent = segs[segs.length - 1];
+  if (!parent || parent === "Singles") return undefined;
+  return parent;
+}
+
+/**
+ * Title (and artist, when present) from a filename shaped like the download
+ * layout writes them: "Artist - Title.ext". Anything without the separator is
+ * all title.
+ */
+export function titleFromFilename(name: string): {
+  title: string;
+  artist?: string;
+} {
+  const stem = name.replace(/\.[^.]+$/, "").trim();
+  const i = stem.indexOf(" - ");
+  if (i > 0) {
+    const artist = stem.slice(0, i).trim();
+    const title = stem.slice(i + 3).trim();
+    if (artist && title) return { title, artist };
+  }
+  return { title: stem || name };
 }
 
 /** Byte size of a file, or undefined if it can't be stat'd. */

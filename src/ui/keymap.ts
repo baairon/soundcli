@@ -108,6 +108,7 @@ export function footerHints(
       if (playlistsDepth === "songs") {
         return [
           { keys: "↵", label: "Play" },
+          { keys: "/", label: "Search" },
           { keys: "d", label: "Delete" },
           { keys: "esc", label: "Back" },
           ALWAYS,
