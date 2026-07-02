@@ -33,7 +33,8 @@ export async function migrateOwnerLayout(
 
   for (const t of library.all()) {
     // Spotify collections are pasted links, not handles: never owner-scoped.
-    if (t.source === "spotify") continue;
+    // Hand-added local files aren't ours to relocate at all.
+    if (t.source === "spotify" || t.source === "local") continue;
 
     // Already-owned tracks are post-migration (downloads write the owner and the
     // canonical path), so only legacy ownerless tracks ever need relocating.

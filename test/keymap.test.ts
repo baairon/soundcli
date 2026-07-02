@@ -32,7 +32,7 @@ describe("footerHints", () => {
     const keys = footerHints("content", "playlists", "songs").map((h) => h.keys);
     expect(keys).toContain("↵");
     expect(keys).toContain("esc");
-    expect(keys).not.toContain("/");
+    expect(keys).toContain("/");
     expect(keys).not.toContain("[ ]");
   });
 });

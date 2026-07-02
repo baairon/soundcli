@@ -24,8 +24,11 @@ type Step =
   | "downloading"
   | "error";
 
+/** Sources the tour can sync from a typed handle (not link-pasted or local). */
+type HandleSource = Exclude<SourceId, "link" | "local">;
+
 const SOURCES: {
-  id: Exclude<SourceId, "link">;
+  id: HandleSource;
   name: string;
   hint: string;
 }[] = [
@@ -35,7 +38,7 @@ const SOURCES: {
 ];
 
 const PROMPTS: Record<
-  Exclude<SourceId, "link">,
+  HandleSource,
   { title: string; hint: string; placeholder: string }
 > = {
   youtube: {
@@ -74,9 +77,7 @@ export function Welcome() {
   } = useStore();
 
   const [step, setStep] = useState<Step>("intro");
-  const [source, setSource] = useState<Exclude<SourceId, "link"> | null>(
-    null,
-  );
+  const [source, setSource] = useState<HandleSource | null>(null);
   const [cursor, setCursor] = useState(0);
   const [error, setError] = useState("");
   /** The handle being looked up, so the loading screen can name it. */
