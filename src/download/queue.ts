@@ -440,6 +440,8 @@ export class DownloadQueue extends EventEmitter {
         }
 
         if (resumed > 0) {
+          // Reset batch count for the resumed source to start fresh
+          this.perSourceCounts.set(schedule.source, 0);
           this.stopped = false;
           this.consecutiveErrors = 0;
           this.emit("update");
@@ -952,8 +954,8 @@ export class DownloadQueue extends EventEmitter {
                 i.percent = 0;
               }
             }
-            // Reset batch count for next batch
-            this.perSourceCounts.set(item.source, 0);
+            // Don't reset batch count here - keep it at limit so it persists correctly
+            // Reset will happen when the schedule expires and downloads resume
           }
         }
       } else {
