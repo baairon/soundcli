@@ -28,6 +28,17 @@ describe("footerHints", () => {
     }
   });
 
+  it("includes rename key for library and playlists", () => {
+    const libraryKeys = footerHints("content", "library").map((h) => h.keys);
+    expect(libraryKeys).toContain("t");
+
+    const playlistsKeys = footerHints("content", "playlists", "sets").map((h) => h.keys);
+    expect(playlistsKeys).toContain("t");
+
+    const songsKeys = footerHints("content", "playlists", "songs").map((h) => h.keys);
+    expect(songsKeys).toContain("t");
+  });
+
   it("drops set-only keys on playlists drill-down", () => {
     const keys = footerHints("content", "playlists", "songs").map((h) => h.keys);
     expect(keys).toContain("↵");
