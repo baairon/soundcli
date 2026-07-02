@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { useStore } from "../store";
 import { wrapStep } from "../move";
@@ -42,6 +42,8 @@ interface SongListProps {
   numbered?: boolean;
   /** Insert a blank line between the leading action row and the first item. */
   actionGap?: boolean;
+  /** Optional callback to get the currently selected item's value. */
+  getSelectedValue?: (value: string | null) => void;
 }
 
 type Row =
@@ -99,6 +101,7 @@ export function SongList({
   deleteTargetsPlaying,
   numbered,
   actionGap,
+  getSelectedValue,
 }: SongListProps) {
   const { listRows } = useStore();
   const [cursor, setCursor] = useState(0);
@@ -130,6 +133,14 @@ export function SongList({
         r.kind === "action" || r.kind === "item",
     )
     .map((r) => (r.kind === "action" ? r.value : r.item.value));
+
+  // Expose the currently selected value to parent components
+  useEffect(() => {
+    if (getSelectedValue) {
+      const v = values[cursor];
+      getSelectedValue(v ?? null);
+    }
+  }, [cursor, values, getSelectedValue]);
 
   // Keep the cursor in range if the list shrank between renders.
   const clamped = Math.min(cursor, Math.max(0, selectableCount - 1));

@@ -10,6 +10,8 @@ import { COLOR, ICON } from "../theme";
 import { cleanText, formatDuration } from "../../util/format";
 import { deleteTracks } from "../../library/delete";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 const SOURCE_ORDER: SourceId[] = ["youtube", "soundcloud", "spotify", "link"];
 
@@ -58,6 +60,7 @@ export function Library() {
   // Pending track rename.
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [newTrackTitle, setNewTrackTitle] = useState("");
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
 
   const songs = useMemo(
     // library.all() is already newest-first (addedAt desc); recompute on new
@@ -121,18 +124,18 @@ export function Library() {
   // Browsing keys:
   //   "/" opens search
   //   "[" / "]" step the source tabs
-  //   "t" renames the first visible track
+  //   "t" renames the selected track
   useInput(
     (input) => {
       if (input === "/") {
         setEditing(true);
         return;
       }
-      if (input === "t" && !editing && !confirm) {
-        const firstTrack = visible.length > 0 ? visible[0] : null;
-        if (firstTrack) {
-          setRenamingTrackId(firstTrack.id);
-          setNewTrackTitle(firstTrack.title);
+      if (input === "t" && !editing && !confirm && selectedTrackId) {
+        const track = library.get(selectedTrackId);
+        if (track) {
+          setRenamingTrackId(track.id);
+          setNewTrackTitle(track.title);
         }
         return;
       }
@@ -174,7 +177,22 @@ export function Library() {
       setNewTrackTitle("");
       return;
     }
-    await library.upsert({ ...track, title: newTitle });
+
+    // Move the file on disk to match the new title
+    const oldPath = track.filePath;
+    const oldDir = path.dirname(oldPath);
+    const oldExt = path.extname(oldPath);
+    const newPath = path.join(oldDir, `${cleanText(newTitle)}${oldExt}`);
+
+    try {
+      await fs.rename(oldPath, newPath);
+      await library.upsert({ ...track, title: newTitle, filePath: newPath });
+    } catch (e) {
+      console.error("Failed to rename file:", e);
+      // Still update metadata even if file move failed
+      await library.upsert({ ...track, title: newTitle });
+    }
+
     setRenamingTrackId(null);
     setNewTrackTitle("");
   };
@@ -321,6 +339,7 @@ export function Library() {
             const t = library.get(value);
             if (t) playTrack(t, visible);
           }}
+          getSelectedValue={setSelectedTrackId}
         />
       )}
     </Box>
