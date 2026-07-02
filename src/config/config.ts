@@ -24,7 +24,6 @@ export interface Config {
   batchLimits?: {
     youtube?: number;
     soundcloud?: number;
-    spotify?: number;
     link?: number;
     local?: number;
   };

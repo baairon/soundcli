@@ -51,6 +51,20 @@ export async function loadResumeSchedule(): Promise<SourceSchedule[]> {
   return [];
 }
 
+/** Load all schedules including expired ones (for auto-resume checking). */
+export async function loadAllSchedules(): Promise<SourceSchedule[]> {
+  try {
+    const raw = await fs.readFile(resumeScheduleFile, "utf8");
+    const parsed = JSON.parse(raw) as ResumeSchedule;
+    if (parsed && parsed.version === 1 && Array.isArray(parsed.schedules)) {
+      return parsed.schedules;
+    }
+  } catch {
+    // missing or invalid: nothing to restore
+  }
+  return [];
+}
+
 export async function saveResumeSchedule(
   schedules: SourceSchedule[],
 ): Promise<void> {

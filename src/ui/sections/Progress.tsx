@@ -49,7 +49,8 @@ export function Progress() {
     for (const item of items) {
       if (item.status === "downloading" || item.status === "done" || item.status === "pending" || item.status === "paused") {
         const current = queue.getBatchCount(item.source);
-        progress.set(item.sourceLabel, { current, limit: 20 });
+        const limit = queue.getBatchLimit(item.source);
+        progress.set(item.sourceLabel, { current, limit });
       }
     }
     return progress;
@@ -59,10 +60,10 @@ export function Progress() {
   const sourceStatus = useMemo(() => {
     const status = new Map<string, { remaining: number; scheduled: boolean; resumeAt?: number; reason?: string; batchProgress?: { current: number; limit: number } }>();
     
-    // Add data from schedules
+    // Add data from schedules (but use actual queue count for remaining)
     for (const schedule of schedules) {
       status.set(schedule.sourceLabel, {
-        remaining: schedule.remaining,
+        remaining: remainingBySource.get(schedule.sourceLabel) ?? schedule.remaining,
         scheduled: true,
         resumeAt: schedule.resumeAt,
         reason: schedule.reason,
@@ -137,7 +138,7 @@ export function Progress() {
             const timeStr = timeUntil > 0 ? formatTimeUntil(timeUntil) : "Ready";
             const batch = status.batchProgress;
             const batchRemaining = batch ? Math.max(0, batch.limit - batch.current) : 0;
-            const batchStr = batch ? `${batchRemaining} left in batch` : "";
+            const batchStr = batch ? `${batchRemaining}/${batch.limit} left in batch` : "";
             const approachingLimit = batch && batch.current >= batch.limit * 0.8; // 80% threshold
             
             return (

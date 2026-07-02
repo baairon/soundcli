@@ -90,8 +90,15 @@ const DEFAULT_CONCURRENCY = 3;
  * Maximum downloads per source per batch before pausing to avoid rate limits.
  * This is "per pagination" - we download in chunks to prevent overwhelming sources.
  * Can be overridden via config.batchLimits.
+ * Defaults to 80% of platform rate limits for safety.
  */
-const DEFAULT_PER_SOURCE_BATCH_LIMIT = 20;
+const DEFAULT_BATCH_LIMITS: Record<string, number> = {
+  youtube: 80, // 80% of 100 requests/hour
+  soundcloud: 160, // 80% of 200 requests/hour
+  spotify: 80, // Uses YouTube's limit
+  link: 80, // Conservative default
+  local: 80, // Conservative default
+};
 
 /** Platform rate limits (requests per hour) for validation. */
 const PLATFORM_LIMITS: Record<string, number> = {
@@ -107,9 +114,11 @@ const SAFETY_MARGIN = 0.8;
 
 /** Get the batch limit for a source from config or default. */
 function getBatchLimit(source: SourceId, config: Config): number {
-  const customLimit = config.batchLimits?.[source as keyof Config["batchLimits"]];
+  // Spotify downloads via YouTube matching, so use YouTube's batch limit
+  const effectiveSource = source === "spotify" ? "youtube" : source;
+  const customLimit = config.batchLimits?.[effectiveSource as keyof Config["batchLimits"]];
   if (customLimit !== undefined) {
-    const platformLimit = PLATFORM_LIMITS[source] ?? 100;
+    const platformLimit = PLATFORM_LIMITS[effectiveSource] ?? 100;
     const maxAllowed = Math.floor(platformLimit * SAFETY_MARGIN);
     if (customLimit > maxAllowed) {
       console.warn(
@@ -119,7 +128,7 @@ function getBatchLimit(source: SourceId, config: Config): number {
     }
     return customLimit;
   }
-  return DEFAULT_PER_SOURCE_BATCH_LIMIT;
+  return DEFAULT_BATCH_LIMITS[effectiveSource] ?? 80;
 }
 
 /**
@@ -199,6 +208,11 @@ export class DownloadQueue extends EventEmitter {
   /** Get the current batch count for a source (for UI display). */
   getBatchCount(source: SourceId): number {
     return this.perSourceCounts.get(source) ?? 0;
+  }
+
+  /** Get the batch limit for a source (for UI display). */
+  getBatchLimit(source: SourceId): number {
+    return getBatchLimit(source, this.config);
   }
   /**
    * Aborts the in-flight "gather" (the UI enumerating selected playlists and
@@ -407,14 +421,15 @@ export class DownloadQueue extends EventEmitter {
    * Called on app startup to auto-resume rate-limited sources.
    */
   async checkScheduledResumes(): Promise<void> {
-    const schedules = await getActiveSchedules();
+    const { loadAllSchedules, clearSchedule } = await import("./resume-schedule");
+    const schedules = await loadAllSchedules();
     const now = Date.now();
-    
+
     for (const schedule of schedules) {
       if (schedule.resumeAt <= now) {
         // Resume time has arrived - clear the schedule and resume items
         await clearSchedule(schedule.source);
-        
+
         let resumed = 0;
         for (const item of this.items) {
           if (item.source === schedule.source && item.status === "paused") {
@@ -423,7 +438,7 @@ export class DownloadQueue extends EventEmitter {
             resumed++;
           }
         }
-        
+
         if (resumed > 0) {
           this.stopped = false;
           this.consecutiveErrors = 0;
@@ -923,7 +938,7 @@ export class DownloadQueue extends EventEmitter {
               (i) => i.source === item.source && (i.status === "pending" || i.status === "downloading"),
             ).length;
             // Always create a schedule so the countdown shows in UI
-            await scheduleResume(item.source, item.sourceLabel, remaining, "batch limit reached");
+            await scheduleResume(item.source, item.sourceLabel, remaining, `batch limit reached (${batchLimit})`);
             // Pause remaining items from this source
             for (const i of this.items) {
               if (i.source === item.source && i.status === "pending") {
