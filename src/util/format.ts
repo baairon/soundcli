@@ -1,4 +1,5 @@
 import os from "node:os";
+import stringWidth from "string-width";
 
 /**
  * Shorten a path for display: the home-directory prefix collapses to "~".
@@ -53,32 +54,99 @@ export function formatRuntime(totalSec?: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-/** True for code points that render as boxes / "?" in a terminal (emoji, symbols, controls). */
-function isJunkCodePoint(cp: number): boolean {
+/**
+ * True only for code points that corrupt a single-line Ink row: control chars,
+ * hard line breaks, and bidi controls that reorder the rest of the line.
+ * Everything else (emoji, symbols, joiners) renders as typed.
+ */
+function isBreakingCodePoint(cp: number): boolean {
   if (cp < 0x20 || cp === 0x7f) return true; // control chars
-  if (cp === 0xfffd) return true; // replacement char
-  if (cp >= 0x200b && cp <= 0x200f) return true; // zero-width / directional marks
-  if (cp >= 0x2028 && cp <= 0x202e) return true; // line/para sep, bidi overrides
-  if (cp === 0x2060 || cp === 0xfeff) return true; // word joiner / BOM
-  if (cp === 0x200d || cp === 0xfe0f || cp === 0x20e3) return true; // ZWJ, VS16, keycap
-  if (cp >= 0x2190 && cp <= 0x21ff) return true; // arrows
-  if (cp >= 0x2300 && cp <= 0x23ff) return true; // misc technical (⌚ ⏰ …)
-  if (cp >= 0x2600 && cp <= 0x27bf) return true; // misc symbols + dingbats
-  if (cp >= 0x2b00 && cp <= 0x2bff) return true; // misc symbols and arrows
-  if (cp >= 0x1f000 && cp <= 0x1ffff) return true; // emoji / pictographs / flags
+  if (cp === 0x2028 || cp === 0x2029) return true; // line/para separators
+  if (cp === 0x200e || cp === 0x200f) return true; // directional marks
+  if (cp >= 0x202a && cp <= 0x202e) return true; // bidi embeds/overrides
+  if (cp >= 0x2066 && cp <= 0x2069) return true; // bidi isolates
+  if (cp === 0xfffd) return true; // replacement char: decode junk, never a glyph
   return false;
 }
 
+// Zero-measured chars that still form clusters: ZWJ joins emoji, VS16/VS15
+// switch presentation; the grapheme stabilizer consumes them downstream.
+const CLUSTER_JOINERS = /[‍︎️]/u;
+
 /**
- * Strip emoji, symbols, and other characters that render as "?" / "□" in a
- * terminal, so titles stay clean. Keeps normal letters (incl. accents / CJK).
+ * Invisible to string-width but not to every terminal: default-ignorable
+ * characters (Hangul fillers, ZWSP, word joiner, BOM) measure 0, yet some get
+ * real cells when drawn (U+3164 draws 2 in Windows Terminal). One such char
+ * makes the row draw wider than Ink measured it, the line wraps, and the
+ * whole frame's incremental redraw corrupts (rows shift, stale cells linger).
+ * Combining marks also measure 0 but stay: they compose onto their base.
+ */
+function isInvisibleCodePoint(ch: string, cp: number): boolean {
+  if (cp < 0x80) return false; // ASCII fast path (soft hyphen sits at 0xad)
+  if (CLUSTER_JOINERS.test(ch)) return false;
+  return stringWidth(ch) === 0 && !/\p{M}/u.test(ch);
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const VS16 = "️";
+
+/**
+ * Ink lays the row out with string-width, but the terminal draws with its own
+ * font rules; any disagreement hard-wraps the row and corrupts the redraw.
+ * Normalize the emoji classes that lie: ZWJ sequences shrink to their lead
+ * emoji, skin tones drop, and text-presentation pictographs get VS16 so both
+ * sides agree on 2 cells. Everything that already agrees passes through 1:1.
+ */
+function stabilizeCluster(cluster: string): string {
+  // ZWJ sequence: keep the lead scalar (+ its VS16); a terminal that can't
+  // compose the full sequence draws each part, up to 3x the measured width.
+  const zwj = cluster.indexOf("‍");
+  if (zwj >= 0) cluster = cluster.slice(0, zwj);
+  // Skin tones: keep the base emoji; uncomposed fallbacks render double-wide.
+  cluster = cluster.replace(/[\u{1f3fb}-\u{1f3ff}]/gu, "");
+  if (!cluster) return "";
+  // Only the emoji plane can disagree with the terminal; BMP symbols (★, bare
+  // ☠) measure 1 and render 1-cell text-style everywhere.
+  if (!/[\u{1f000}-\u{1ffff}]/u.test(cluster)) return cluster;
+  if (stringWidth(cluster) === 2) return cluster;
+  // Text-presentation pictograph (bare 🕸 measures 1, renders 2): force emoji
+  // presentation so measurement and glyph agree.
+  if (stringWidth(cluster + VS16) === 2) return cluster + VS16;
+  return "";
+}
+
+// Anything needing grapheme-level stabilization: ZWJ, VS16, or emoji plane.
+const NEEDS_STABILIZING = /[‍️\u{1f000}-\u{1ffff}]/u;
+// The same titles re-render on every playback tick; cache the cleaned form.
+const cleanCache = new Map<string, string>();
+
+/**
+ * Titles render 1:1 (emoji and symbols included); only characters that would
+ * break the row itself are dropped, emoji are width-stabilized, and inner
+ * whitespace collapses so a name with a newline still fits one line.
  */
 export function cleanText(s: string): string {
-  let out = "";
+  const hit = cleanCache.get(s);
+  if (hit !== undefined) return hit;
+  let filtered = "";
   for (const ch of s.normalize("NFC")) {
-    if (!isJunkCodePoint(ch.codePointAt(0)!)) out += ch;
+    const cp = ch.codePointAt(0)!;
+    if (!isBreakingCodePoint(cp) && !isInvisibleCodePoint(ch, cp)) {
+      filtered += ch;
+    }
   }
-  return out.replace(/\s+/g, " ").trim() || "Untitled";
+  // ASCII/BMP-only titles (the overwhelming majority) skip the Segmenter.
+  let out = filtered;
+  if (NEEDS_STABILIZING.test(filtered)) {
+    out = "";
+    for (const { segment } of graphemes.segment(filtered)) {
+      out += stabilizeCluster(segment);
+    }
+  }
+  const result = out.replace(/\s+/g, " ").trim() || "Untitled";
+  if (cleanCache.size >= 4000) cleanCache.clear();
+  cleanCache.set(s, result);
+  return result;
 }
 
 /**
@@ -159,10 +227,12 @@ export function linkCollectionTitle(url: string): string {
   }
 }
 
-/** Truncate to `max` characters with a trailing ellipsis. */
+/** Truncate to `max` characters with a trailing ellipsis. Slices by code
+ *  point, never through the middle of a surrogate pair (emoji). */
 export function truncate(s: string, max: number): string {
-  if (max <= 1) return s.slice(0, Math.max(0, max));
-  return s.length <= max ? s : s.slice(0, max - 1) + "…";
+  const chars = [...s];
+  if (max <= 1) return chars.slice(0, Math.max(0, max)).join("");
+  return chars.length <= max ? s : chars.slice(0, max - 1).join("") + "…";
 }
 
 /** Compact remaining-time label, e.g. "3h 10m", "12m 30s", "45s". */

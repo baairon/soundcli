@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { libraryIndexFile } from "../config/paths";
+import { fuzzyFilter } from "../util/fuzzy";
 import type { LibraryIndex, Track } from "./types";
 
 /**
@@ -68,15 +69,13 @@ export class Library {
   }
 
   search(query: string): Track[] {
-    const q = query.trim().toLowerCase();
-    if (!q) return this.all();
-    return this.all().filter(
-      (t) =>
-        t.title.toLowerCase().includes(q) ||
-        (t.artist?.toLowerCase().includes(q) ?? false) ||
-        (t.album?.toLowerCase().includes(q) ?? false) ||
-        (t.playlist?.toLowerCase().includes(q) ?? false),
-    );
+    // Fuzzy: best match first; ties keep all()'s newest-first order.
+    return fuzzyFilter(query, this.all(), (t) => [
+      t.title,
+      t.artist,
+      t.album,
+      t.playlist,
+    ]);
   }
 
   async upsert(track: Track): Promise<void> {

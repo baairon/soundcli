@@ -8,12 +8,12 @@ import { TextField } from "../components/TextField";
 import { SongList, type SongGroup } from "../components/SongList";
 import { COLOR, ICON } from "../theme";
 import { cleanText, formatDuration, formatRuntime } from "../../util/format";
+import { fuzzyFilter } from "../../util/fuzzy";
 import { deleteTracks } from "../../library/delete";
-import { displaySource } from "../../library/drift";
+import { displaySource, setFolderKey } from "../../library/drift";
+import { renamePlaylist, renameTrack } from "../../library/rename";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
 import { shuffledOrder } from "../../player/order";
-import { promises as fs } from "node:fs";
-import path from "node:path";
 
 const SOURCE_ORDER: SourceId[] = [
   "youtube",
@@ -70,8 +70,6 @@ export function Playlists() {
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [newTrackTitle, setNewTrackTitle] = useState("");
-  const [selectedSetKey, setSelectedSetKey] = useState<string | null>(null);
-  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   // Search inside the open set, mirroring the Library search box.
   const [songQ, setSongQ] = useState("");
   const [songFiltering, setSongFiltering] = useState(false);
@@ -85,14 +83,18 @@ export function Playlists() {
   );
 
   // Bucket tracks into sets, preserving first-appearance (newest-first) order.
-  // Sets group under the top-level folder their files sit in (like the
-  // Library tabs), so re-sorting on disk re-homes them here too.
+  // A set is the folder its files sit in (like the Library tabs), so
+  // re-sorting on disk re-homes tracks here too, and metadata drift (an
+  // ownerless stray in an owned folder) can never split a folder into two
+  // look-alike playlists. Tracks outside the library group by metadata.
   const sets = useMemo(() => {
     const byKey = new Map<string, SetInfo>();
     const ordered: SetInfo[] = [];
     for (const t of songs) {
       const src = displaySource(t, config.libraryDir);
-      const key = `${src}|${t.owner ?? ""}|${t.playlist ?? "Other"}`;
+      const key =
+        setFolderKey(t, config.libraryDir) ??
+        `${src}|${t.owner ?? ""}|${t.playlist ?? "Other"}`;
       let s = byKey.get(key);
       if (!s) {
         s = {
@@ -111,15 +113,10 @@ export function Playlists() {
   }, [songs, config.libraryDir]);
 
   const searching = q.trim().length > 0;
-  const qLower = q.toLowerCase();
   const filteredSets = useMemo(() => {
     if (!searching) return sets;
-    return sets.filter(
-      (s) =>
-        s.name.toLowerCase().includes(qLower) ||
-        (s.owner && s.owner.toLowerCase().includes(qLower)),
-    );
-  }, [sets, searching, qLower]);
+    return fuzzyFilter(q, sets, (s) => [s.name, s.owner]);
+  }, [sets, searching, q]);
 
   const presentSources = useMemo(() => {
     const set = new Set(sets.map((s) => s.source));
@@ -219,20 +216,6 @@ export function Playlists() {
   );
 
   useInput(
-    (input) => {
-      if (input === "t" && !confirm && selectedTrackId) {
-        const track = library.get(selectedTrackId);
-        if (track) {
-          setRenamingTrackId(track.id);
-          setNewTrackTitle(track.title);
-        }
-        return;
-      }
-    },
-    { isActive: inSongs && !confirm && !renamingTrack },
-  );
-
-  useInput(
     (_input, key) => {
       if (key.escape) {
         setRenamingTrackId(null);
@@ -243,31 +226,12 @@ export function Playlists() {
   );
 
   const handleTrackRenameSubmit = async () => {
-    if (!renamingTrackId || !newTrackTitle.trim()) return;
-    const track = library.get(renamingTrackId);
-    if (!track) return;
-    const newTitle = newTrackTitle.trim();
-    if (track.title === newTitle) {
-      setRenamingTrackId(null);
-      setNewTrackTitle("");
-      return;
+    const track = renamingTrackId ? library.get(renamingTrackId) : undefined;
+    if (track) {
+      const result = await renameTrack(library, track, newTrackTitle);
+      // Taken name: keep the field open for adjustment; esc cancels.
+      if (result === "collision") return;
     }
-
-    // Move the file on disk to match the new title
-    const oldPath = track.filePath;
-    const oldDir = path.dirname(oldPath);
-    const oldExt = path.extname(oldPath);
-    const newPath = path.join(oldDir, `${cleanText(newTitle)}${oldExt}`);
-
-    try {
-      await fs.rename(oldPath, newPath);
-      await library.upsert({ ...track, title: newTitle, filePath: newPath });
-    } catch (e) {
-      console.error("Failed to rename file:", e);
-      // Still update metadata even if file move failed
-      await library.upsert({ ...track, title: newTitle });
-    }
-
     setRenamingTrackId(null);
     setNewTrackTitle("");
   };
@@ -276,14 +240,6 @@ export function Playlists() {
     (input) => {
       if (inSets && input === "/") {
         setFiltering(true);
-        return;
-      }
-      if (input === "t" && !filtering && !confirm && selectedSetKey) {
-        const selectedSet = sets.find((s) => s.key === selectedSetKey);
-        if (selectedSet) {
-          setRenamingSetKey(selectedSet.key);
-          setNewPlaylistName(selectedSet.name);
-        }
         return;
       }
       if (input === "[") stepSourceTab(-1);
@@ -310,52 +266,18 @@ export function Playlists() {
   );
 
   const handleRenameSubmit = async () => {
-    if (!renamingSetKey || !newPlaylistName.trim()) return;
-    const targetSet = sets.find((s) => s.key === renamingSetKey);
-    if (!targetSet) return;
-    const oldName = targetSet.name;
-    const newName = newPlaylistName.trim();
-    if (oldName === newName) {
-      setRenamingSetKey(null);
-      setNewPlaylistName("");
-      return;
+    const targetSet = renamingSetKey
+      ? sets.find((s) => s.key === renamingSetKey)
+      : undefined;
+    if (targetSet) {
+      const result = await renamePlaylist(
+        library,
+        targetSet.tracks,
+        newPlaylistName,
+      );
+      // Taken name: keep the field open for adjustment; esc cancels.
+      if (result === "collision") return;
     }
-
-    // Move the folder on disk for each track
-    const tracksToUpdate = [];
-    for (const track of targetSet.tracks) {
-      const oldPath = track.filePath;
-      const oldDir = path.dirname(oldPath);
-      const oldBaseName = path.basename(oldPath, path.extname(oldPath));
-      const oldExt = path.extname(oldPath);
-      
-      // The folder structure is: libraryDir/source/owner/playlist/filename
-      // We need to rename the playlist folder
-      const pathParts = oldDir.split(path.sep);
-      const playlistIndex = pathParts.findIndex((p) => p === cleanText(oldName));
-      
-      if (playlistIndex >= 0) {
-        pathParts[playlistIndex] = cleanText(newName);
-        const newDir = pathParts.join(path.sep);
-        const newPath = path.join(newDir, `${oldBaseName}${oldExt}`);
-        
-        try {
-          // Create new directory if it doesn't exist
-          await fs.mkdir(newDir, { recursive: true });
-          await fs.rename(oldPath, newPath);
-          tracksToUpdate.push({ ...track, playlist: newName, filePath: newPath });
-        } catch (e) {
-          console.error(`Failed to move file for ${track.title}:`, e);
-          // Still update metadata even if file move failed
-          tracksToUpdate.push({ ...track, playlist: newName });
-        }
-      } else {
-        // Fallback: just update metadata
-        tracksToUpdate.push({ ...track, playlist: newName });
-      }
-    }
-
-    await library.upsertMany(tracksToUpdate);
     setRenamingSetKey(null);
     setNewPlaylistName("");
   };
@@ -391,6 +313,18 @@ export function Playlists() {
       : `Delete '${cleanText(confirm.label)}'?  y Delete  ${ICON.dot}  esc Keep`;
   }
 
+  // Songs narrowed to the in-set search; play/shuffle scope to the matches.
+  // Memoized so the fuzzy pass runs on query/set changes only, never on
+  // playback-tick or cursor re-renders.
+  const sq = songQ.trim();
+  const shown = useMemo(
+    () =>
+      active && sq
+        ? fuzzyFilter(songQ, active.tracks, (t) => [t.title, t.artist])
+        : (active?.tracks ?? []),
+    [active, sq, songQ],
+  );
+
   if (sets.length === 0) {
     return (
       <Box flexDirection="column">
@@ -420,15 +354,6 @@ export function Playlists() {
     ]
       .filter(Boolean)
       .join(`  ${ICON.dot}  `);
-    // Songs narrowed to the in-set search; play/shuffle scope to the matches.
-    const sq = songQ.trim().toLowerCase();
-    const shown = sq
-      ? active.tracks.filter(
-          (t) =>
-            t.title.toLowerCase().includes(sq) ||
-            (t.artist?.toLowerCase().includes(sq) ?? false),
-        )
-      : active.tracks;
     const sn = shown.length;
     const showSongSearchRow = songFiltering || sq.length > 0;
     return (
@@ -509,7 +434,13 @@ export function Playlists() {
               const t = library.get(value);
               if (t) playTrack(t, shown);
             }}
-            getSelectedValue={setSelectedTrackId}
+            onRename={(value) => {
+              const t = library.get(value);
+              if (t) {
+                setRenamingTrackId(t.id);
+                setNewTrackTitle(t.title);
+              }
+            }}
           />
         )}
       </Box>
@@ -540,7 +471,8 @@ export function Playlists() {
   const subtitle = `${visibleSets.length} playlist${visibleSets.length === 1 ? "" : "s"}`;
   // The filter/hint row carries content only while typing, confirming a
   // delete, or showing an active query; when compact and idle, drop it.
-  const showSearchRow = !compact || filtering || confirm !== null || searching;
+  const showSearchRow =
+    !compact || filtering || confirm !== null || searching || renamingSet;
   // Rows above the list beyond the header: tabs (1) + the filter row when shown
   // (2 normally, 1 compact since its margin goes too).
   const reserveRows = 1 + (showSearchRow ? (compact ? 1 : 2) : 0);
@@ -592,7 +524,7 @@ export function Playlists() {
         <SongList
           key="sets"
           groups={groups}
-          focused={focused && !confirm && !filtering}
+          focused={focused && !confirm && !filtering && !renamingSet}
           reserveRows={reserveRows}
           onDelete={(value) => {
             const s = sets.find((x) => x.key === value);
@@ -605,7 +537,13 @@ export function Playlists() {
               });
           }}
           onSelect={(value) => setView({ kind: "songs", setKey: value })}
-          getSelectedValue={setSelectedSetKey}
+          onRename={(value) => {
+            const s = sets.find((x) => x.key === value);
+            if (s) {
+              setRenamingSetKey(s.key);
+              setNewPlaylistName(s.name);
+            }
+          }}
         />
       )}
     </Box>

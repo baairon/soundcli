@@ -8,6 +8,7 @@ import { TextField } from "../components/TextField";
 import { SongList } from "../components/SongList";
 import { COLOR, ICON } from "../theme";
 import { cleanText, formatDuration } from "../../util/format";
+import { fuzzyFilter } from "../../util/fuzzy";
 import { deleteTracks } from "../../library/delete";
 import { displaySource } from "../../library/drift";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
@@ -101,14 +102,20 @@ export function History() {
     if (filter !== "all" && !presentSources.includes(filter)) setFilter("all");
   }, [filter, presentSources]);
 
-  const inSource =
-    filter === "all" ? tracks : tracks.filter((t) => srcOf(t) === filter);
-  const qLower = q.toLowerCase();
-  const visible = searching
-    ? inSource.filter((t) =>
-        `${t.title} ${t.artist ?? ""}`.toLowerCase().includes(qLower),
-      )
-    : inSource;
+  const inSource = useMemo(
+    () =>
+      filter === "all" ? tracks : tracks.filter((t) => srcOf(t) === filter),
+    [filter, tracks, srcOf],
+  );
+  // Memoized: fuzzy search must run on query/tab/data changes only, never on
+  // playback-tick or cursor re-renders.
+  const visible = useMemo(
+    () =>
+      searching
+        ? fuzzyFilter(q, inSource, (t) => [t.title, t.artist])
+        : inSource,
+    [searching, q, inSource],
+  );
 
   // Take over the keyboard only while typing in the search box; a pending
   // delete confirm owns esc so the global one doesn't bounce to the sidebar.
