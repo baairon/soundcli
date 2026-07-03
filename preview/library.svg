@@ -116,8 +116,8 @@
     <text x="377.6" y="524" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Delete</text>
     <text x="464" y="524" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">t</text>
     <text x="483.2" y="524" textLength="57.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Rename</text>
-    <text x="569.6" y="524" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">esc</text>
-    <text x="608" y="524" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Back</text>
+    <text x="569.6" y="524" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">tab</text>
+    <text x="608" y="524" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Pane</text>
     <text x="675.2" y="524" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">?</text>
     <text x="694.4" y="524" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Keys</text>
   </g>
