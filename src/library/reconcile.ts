@@ -7,9 +7,11 @@ import {
   fileSizeOf,
   findDuplicates,
   indexAudioByBasename,
+  ownerFolderOf,
   playlistFromPath,
   titleFromFilename,
 } from "./drift";
+import { sanitizeName } from "../ytdlp/args";
 
 export interface ReconcileResult {
   /** Dead index entries removed (file was gone from disk). */
@@ -22,12 +24,15 @@ export interface ReconcileResult {
   relinked: number;
   /** Hand-added audio files adopted into the library as "local" tracks. */
   adopted: number;
+  /** Ownerless tracks that inherited the owner of the folder they sit in. */
+  healedOwners: number;
 }
 
 /**
  * Silent library hygiene: drop entries whose audio file is gone, collapse
- * duplicate songs down to a single copy (deleting the redundant files), and
- * adopt audio the user added by hand. Mutates the library in place; never
+ * duplicate songs down to a single copy (deleting the redundant files),
+ * adopt audio the user added by hand, and heal owner drift so a folder never
+ * splits into look-alike playlists. Mutates the library in place; never
  * touches the network.
  */
 export async function reconcileLibrary(
@@ -40,6 +45,7 @@ export async function reconcileLibrary(
   let deletedFiles = 0;
   let relinked = 0;
   let adopted = 0;
+  let healedOwners = 0;
 
   // One walk of the music folder serves both the re-link pass and adoption.
   const byBasename = libraryDir
@@ -209,6 +215,54 @@ export async function reconcileLibrary(
     }
   }
 
+  // 4) Heal owner drift: the download layout files every owned track under
+  //    <Source>/<owner>/…, so a folder's rightful owner is the sibling owner
+  //    whose handle names that very folder. Ownerless neighbors (adoptions,
+  //    cross-source strays) inherit it; a track owned by someone else just
+  //    visiting the folder neither heals nor blocks. Without this, dedupe
+  //    scopes the strays globally and metadata grouping splits the folder
+  //    into look-alike playlists. The playlist re-derives with the owner so
+  //    the owner segment of the path stops reading as a playlist name.
+  if (libraryDir) {
+    const byDir = new Map<string, Track[]>();
+    for (const t of library.all()) {
+      // Case-folded: Windows paths are case-insensitive, and on other OSes a
+      // false merge is harmless (an ambiguous group simply never heals).
+      const dir = path.dirname(t.filePath).toLowerCase();
+      const arr = byDir.get(dir);
+      if (arr) arr.push(t);
+      else byDir.set(dir, [t]);
+    }
+    const heals: Track[] = [];
+    for (const members of byDir.values()) {
+      if (members.every((t) => t.owner)) continue;
+      const folder = ownerFolderOf(members[0]!.filePath, libraryDir);
+      if (!folder) continue;
+      const owners = new Set(
+        members
+          .map((t) => t.owner)
+          .filter((o): o is string => Boolean(o))
+          .filter((o) => sanitizeName(o).toLowerCase() === folder.toLowerCase()),
+      );
+      if (owners.size !== 1) continue;
+      const [owner] = owners;
+      for (const t of members) {
+        if (t.owner) continue;
+        // Merge onto the live entry so a concurrent upsert isn't clobbered.
+        const live = library.get(t.id) ?? t;
+        heals.push({
+          ...live,
+          owner,
+          playlist: playlistFromPath(live.filePath, libraryDir, owner),
+        });
+      }
+    }
+    if (heals.length > 0) {
+      await library.upsertMany(heals);
+      healedOwners = heals.length;
+    }
+  }
+
   // Record file sizes for present tracks so a future rename can be matched by
   // content, not name. Stat first (slow), then apply against the live entries in
   // one synchronous pass, so a download upserting the same track mid-stat is
@@ -230,5 +284,12 @@ export async function reconcileLibrary(
     if (updates.length > 0) await library.upsertMany(updates);
   }
 
-  return { prunedMissing, mergedDuplicates, deletedFiles, relinked, adopted };
+  return {
+    prunedMissing,
+    mergedDuplicates,
+    deletedFiles,
+    relinked,
+    adopted,
+    healedOwners,
+  };
 }

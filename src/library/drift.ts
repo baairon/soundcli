@@ -1,7 +1,6 @@
 import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 import { SOURCE_LABELS, type SourceId, type Track } from "./types";
-import { cleanText } from "../util/format";
 import { sanitizeName } from "../ytdlp/args";
 
 /** A set of library entries that are all the same song. */
@@ -21,10 +20,39 @@ export interface DuplicateGroup {
 export function trackSignature(
   t: Pick<Track, "artist" | "title" | "owner"> & { source?: Track["source"] },
 ): string {
-  const artist = cleanText((t.artist ?? "").toLowerCase());
-  const title = cleanText((t.title ?? "").toLowerCase());
+  const artist = foldForSignature((t.artist ?? "").toLowerCase());
+  const title = foldForSignature((t.title ?? "").toLowerCase());
   const collection = t.owner ? `${t.source ?? ""}:${t.owner.toLowerCase()}` : "";
   return `${collection}|${artist}|${title}`;
+}
+
+/**
+ * Emoji/symbol-insensitive folding for dedupe signatures only. Display now
+ * renders titles 1:1, but signatures must keep the historical strict strip or
+ * previously-merged duplicates ("🔥 Song" vs "Song") stop matching.
+ */
+function foldForSignature(s: string): string {
+  let out = "";
+  for (const ch of s.normalize("NFC")) {
+    const cp = ch.codePointAt(0)!;
+    const junk =
+      cp < 0x20 ||
+      cp === 0x7f ||
+      cp === 0xfffd ||
+      (cp >= 0x200b && cp <= 0x200f) ||
+      (cp >= 0x2028 && cp <= 0x202e) ||
+      cp === 0x2060 ||
+      cp === 0xfeff ||
+      cp === 0xfe0f ||
+      cp === 0x20e3 ||
+      (cp >= 0x2190 && cp <= 0x21ff) ||
+      (cp >= 0x2300 && cp <= 0x23ff) ||
+      (cp >= 0x2600 && cp <= 0x27bf) ||
+      (cp >= 0x2b00 && cp <= 0x2bff) ||
+      (cp >= 0x1f000 && cp <= 0x1ffff);
+    if (!junk) out += ch;
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /** Group tracks by signature, returning only the groups with 2+ members. */
@@ -159,6 +187,42 @@ export function playlistFromPath(
   const parent = segs[segs.length - 1];
   if (!parent || parent === "Singles") return undefined;
   return parent;
+}
+
+/**
+ * The owner-handle segment the download layout reserves under a source root
+ * (<Source>/<owner>/...), or undefined when the file doesn't sit in one.
+ * Purely positional: whether the segment really names an owner is decided by
+ * whoever holds matching metadata (see reconcile's owner healing).
+ */
+export function ownerFolderOf(
+  filePath: string,
+  libraryDir: string,
+): string | undefined {
+  const rel = path.relative(libraryDir, filePath);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
+  const segs = rel.split(path.sep).slice(0, -1);
+  if (segs.length < 2) return undefined; // owner folders sit below a source root
+  return SOURCE_BY_FOLDER.has(segs[0]!) ? segs[1] : undefined;
+}
+
+/**
+ * Grouping key for the playlists panel: the folder the file sits in, so
+ * on-disk organization is the single truth for what forms a set and metadata
+ * drift (a missing owner, a cross-source stray) can never split a folder
+ * into look-alike playlists. Case-folded, since Windows paths are
+ * case-insensitive and a false merge elsewhere is harmless. Undefined for a
+ * file outside the library (or no library dir): callers fall back to
+ * metadata grouping.
+ */
+export function setFolderKey(
+  t: Track,
+  libraryDir: string | undefined,
+): string | undefined {
+  if (!libraryDir) return undefined;
+  const rel = path.relative(libraryDir, path.dirname(t.filePath));
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
+  return `dir|${rel.toLowerCase()}`;
 }
 
 /**

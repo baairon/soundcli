@@ -86,6 +86,7 @@ describe("reconcileLibrary", () => {
       deletedFiles: 0,
       relinked: 0,
       adopted: 0,
+      healedOwners: 0,
     });
     expect(library.all()).toHaveLength(1);
 
@@ -315,6 +316,83 @@ describe("reconcileLibrary", () => {
     await reconcileLibrary(library, undefined, dir);
 
     expect(library.all()[0]!.fileSize).toBe(5);
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("heals ownerless strays into the owner whose handle names the folder", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-heal-"));
+    const liked = path.join(dir, "SoundCloud", "lumen", "Liked Songs");
+    await fs.mkdir(liked, { recursive: true });
+    const owned = path.join(liked, "nyx - reverie.m4a");
+    const stray = path.join(liked, "grey tide - eos.opus");
+    const visitor = path.join(liked, "guest - tune.m4a");
+    const handAdded = path.join(liked, "Murmurlin - her.m4a");
+    for (const f of [owned, stray, visitor, handAdded]) {
+      await fs.writeFile(f, "audio");
+    }
+
+    const library = fakeLibrary([
+      track({
+        id: "soundcloud:a",
+        source: "soundcloud",
+        owner: "lumen",
+        playlist: "Liked Songs",
+        filePath: owned,
+      }),
+      // Downloaded via another source into the same folder: no owner.
+      track({
+        id: "youtube:b",
+        title: "eos",
+        artist: "grey tide",
+        playlist: "Liked Songs",
+        filePath: stray,
+      }),
+      // Another handle's track sorted into the folder by hand: it neither
+      // heals nor blocks, and keeps its own owner.
+      track({
+        id: "soundcloud:v",
+        source: "soundcloud",
+        owner: "someone_else",
+        title: "tune",
+        artist: "guest",
+        playlist: "Liked Songs",
+        filePath: visitor,
+      }),
+    ]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    // The hand-added file was adopted, then every ownerless track in the
+    // folder inherits lumen, so the sets panel shows a single "Liked Songs".
+    expect(r.adopted).toBe(1);
+    expect(r.healedOwners).toBe(2);
+    expect(library.get("soundcloud:v")!.owner).toBe("someone_else");
+    for (const t of library.all()) {
+      if (t.id === "soundcloud:v") continue;
+      expect(t.owner).toBe("lumen");
+      expect(t.playlist).toBe("Liked Songs");
+    }
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("never heals outside the download layout's owner folders", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-mixed-"));
+    const mix = path.join(dir, "Mix");
+    await fs.mkdir(mix, { recursive: true });
+    const a = path.join(mix, "a.mp3");
+    const b = path.join(mix, "b.mp3");
+    for (const f of [a, b]) await fs.writeFile(f, "audio");
+
+    const library = fakeLibrary([
+      // Owned, but "Mix" is not <Source>/<owner>: no owner to arbitrate.
+      track({ id: "soundcloud:a", source: "soundcloud", owner: "one", filePath: a }),
+      track({ id: "youtube:b", title: "B", filePath: b }),
+    ]);
+    const r = await reconcileLibrary(library, undefined, dir);
+
+    expect(r.healedOwners).toBe(0);
+    expect(library.get("youtube:b")!.owner).toBeUndefined();
 
     await fs.rm(dir, { recursive: true, force: true });
   });

@@ -6,7 +6,9 @@ import {
   displaySource,
   findDuplicates,
   indexAudioByBasename,
+  ownerFolderOf,
   playlistFromPath,
+  setFolderKey,
   titleFromFilename,
   trackSignature,
 } from "../src/library/drift";
@@ -109,6 +111,56 @@ describe("displaySource", () => {
     const outside = track({ filePath: path.join(os.tmpdir(), "x", "s.mp3") });
     expect(displaySource(outside, lib)).toBe("youtube");
     expect(displaySource(at("SoundCloud", "s.mp3"), undefined)).toBe("youtube");
+  });
+});
+
+describe("ownerFolderOf", () => {
+  const lib = path.join(os.tmpdir(), "lib");
+  const p = (...segs: string[]) => path.join(lib, ...segs);
+
+  it("names the segment the download layout reserves for the owner", () => {
+    expect(ownerFolderOf(p("SoundCloud", "lumen", "Liked Songs", "s.m4a"), lib)).toBe("lumen");
+    expect(ownerFolderOf(p("SoundCloud", "lumen", "s.m4a"), lib)).toBe("lumen");
+  });
+  it("is undefined outside a source root or too shallow", () => {
+    expect(ownerFolderOf(p("My Mix", "s.mp3"), lib)).toBeUndefined();
+    expect(ownerFolderOf(p("SoundCloud", "s.mp3"), lib)).toBeUndefined();
+    expect(ownerFolderOf(p("s.mp3"), lib)).toBeUndefined();
+    expect(
+      ownerFolderOf(path.join(os.tmpdir(), "x", "s.mp3"), lib),
+    ).toBeUndefined();
+  });
+});
+
+describe("setFolderKey", () => {
+  const lib = path.join(os.tmpdir(), "lib");
+  const at = (...segs: string[]) =>
+    track({ filePath: path.join(lib, ...segs) });
+
+  it("groups by the containing folder, ignoring metadata", () => {
+    const a = track({
+      filePath: path.join(lib, "SoundCloud", "lumen", "Liked Songs", "a.m4a"),
+      owner: "lumen",
+    });
+    const b = track({
+      // Same folder, no owner, other source: still the same set.
+      filePath: path.join(lib, "SoundCloud", "lumen", "Liked Songs", "b.opus"),
+      source: "youtube",
+    });
+    expect(setFolderKey(a, lib)).toBe(setFolderKey(b, lib));
+    expect(setFolderKey(a, lib)).not.toBe(
+      setFolderKey(at("SoundCloud", "other", "Liked Songs", "c.m4a"), lib),
+    );
+  });
+  it("folds case so Windows path variants agree", () => {
+    expect(setFolderKey(at("Mix", "a.mp3"), lib)).toBe(
+      setFolderKey(at("mix", "b.mp3"), lib),
+    );
+  });
+  it("is undefined outside the library or without a library dir", () => {
+    const outside = track({ filePath: path.join(os.tmpdir(), "x", "s.mp3") });
+    expect(setFolderKey(outside, lib)).toBeUndefined();
+    expect(setFolderKey(at("Mix", "a.mp3"), undefined)).toBeUndefined();
   });
 });
 

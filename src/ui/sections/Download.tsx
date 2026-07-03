@@ -26,6 +26,7 @@ import {
   linkCollectionTitle,
   trackDisplayTitle,
 } from "../../util/format";
+import { fuzzyFilter } from "../../util/fuzzy";
 import { WAITING_FOR_TOOLS, type QueueItem } from "../../download/queue";
 import type { SourceAdapter, SourcePlaylist } from "../../sources/types";
 import { SOURCE_LABELS, type SourceId } from "../../library/types";
@@ -591,16 +592,12 @@ export function PlaylistPicker({
 
   // One flat list, no category headers: the order the source gave us already
   // reads naturally (likes first, then sets), and a header per bucket costs
-  // rows and visual noise this picker doesn't need.
+  // rows and visual noise this picker doesn't need. While searching, fuzzy
+  // matches rank best-first instead.
   const searching = q.trim().length > 0;
-  const qLower = q.toLowerCase();
-
-  const ordered: SourcePlaylist[] = [];
-  for (const item of lists) {
-    if (searching && !item.title.toLowerCase().includes(qLower)) continue;
-
-    ordered.push(item);
-  }
+  const ordered: SourcePlaylist[] = searching
+    ? fuzzyFilter(q, lists, (item) => [item.title])
+    : [...lists];
 
   // Cursor space: row 0 is the "everything new" action, then every list.
   const selectableCount = ordered.length + 1;

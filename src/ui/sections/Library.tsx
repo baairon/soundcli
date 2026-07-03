@@ -10,9 +10,8 @@ import { COLOR, ICON } from "../theme";
 import { cleanText, formatDuration } from "../../util/format";
 import { deleteTracks } from "../../library/delete";
 import { displaySource } from "../../library/drift";
+import { renameTrack } from "../../library/rename";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
-import { promises as fs } from "node:fs";
-import path from "node:path";
 
 const SOURCE_ORDER: SourceId[] = [
   "youtube",
@@ -67,7 +66,6 @@ export function Library() {
   // Pending track rename.
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [newTrackTitle, setNewTrackTitle] = useState("");
-  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
 
   const songs = useMemo(
     // library.all() is already newest-first (addedAt desc); recompute on new
@@ -114,19 +112,36 @@ export function Library() {
   }, [filter, presentSources]);
 
   // Tracks narrowed to the active source tab.
-  const inSource =
-    filter === "all" ? songs : songs.filter((t) => srcOf(t) === filter);
+  const inSource = useMemo(
+    () => (filter === "all" ? songs : songs.filter((t) => srcOf(t) === filter)),
+    [filter, songs, srcOf],
+  );
 
-  const visible = searching
-    ? library.search(q).filter((t) => filter === "all" || srcOf(t) === filter)
-    : inSource;
+  // Memoized: fuzzy search over the whole library must run on query/tab/data
+  // changes only, never on playback-tick or cursor re-renders.
+  const visible = useMemo(
+    () =>
+      searching
+        ? library
+            .search(q)
+            .filter((t) => filter === "all" || srcOf(t) === filter)
+        : inSource,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [searching, q, filter, inSource, srcOf],
+  );
 
   // Take over the keyboard only while typing in the search box; a pending
   // delete confirm owns esc so the global one doesn't bounce to the sidebar.
   const renaming = focused && renamingTrackId !== null;
   useEffect(() => {
     setCaptureMode(
-      editing ? "text" : confirm ? "esc" : renaming ? "text" : "none",
+      focused && editing
+        ? "text"
+        : focused && confirm
+          ? "esc"
+          : renaming
+            ? "text"
+            : "none",
     );
     return () => setCaptureMode("none");
   }, [focused, editing, confirm, renaming, setCaptureMode]);
@@ -142,19 +157,10 @@ export function Library() {
   // Browsing keys:
   //   "/" opens search
   //   "[" / "]" step the source tabs
-  //   "t" renames the selected track
   useInput(
     (input) => {
       if (input === "/") {
         setEditing(true);
-        return;
-      }
-      if (input === "t" && !editing && !confirm && selectedTrackId) {
-        const track = library.get(selectedTrackId);
-        if (track) {
-          setRenamingTrackId(track.id);
-          setNewTrackTitle(track.title);
-        }
         return;
       }
       if (input === "[" || input === "]") {
@@ -186,31 +192,13 @@ export function Library() {
   );
 
   const handleRenameSubmit = async () => {
-    if (!renamingTrackId || !newTrackTitle.trim()) return;
-    const track = library.get(renamingTrackId);
-    if (!track) return;
-    const newTitle = newTrackTitle.trim();
-    if (track.title === newTitle) {
-      setRenamingTrackId(null);
-      setNewTrackTitle("");
-      return;
+    const track = renamingTrackId ? library.get(renamingTrackId) : undefined;
+    if (track) {
+      const result = await renameTrack(library, track, newTrackTitle);
+      // The new name is already taken on disk: keep the field open so it can
+      // be adjusted (esc cancels) instead of silently dropping the rename.
+      if (result === "collision") return;
     }
-
-    // Move the file on disk to match the new title
-    const oldPath = track.filePath;
-    const oldDir = path.dirname(oldPath);
-    const oldExt = path.extname(oldPath);
-    const newPath = path.join(oldDir, `${cleanText(newTitle)}${oldExt}`);
-
-    try {
-      await fs.rename(oldPath, newPath);
-      await library.upsert({ ...track, title: newTitle, filePath: newPath });
-    } catch (e) {
-      console.error("Failed to rename file:", e);
-      // Still update metadata even if file move failed
-      await library.upsert({ ...track, title: newTitle });
-    }
-
     setRenamingTrackId(null);
     setNewTrackTitle("");
   };
@@ -289,7 +277,8 @@ export function Library() {
   // The search/hint row carries content only while typing, confirming a
   // delete, or showing an active query; when compact and idle, drop it so the
   // list gets the row back.
-  const showSearchRow = !compact || editing || confirm !== null || searching;
+  const showSearchRow =
+    !compact || editing || confirm !== null || searching || renaming;
   // Rows above the list beyond the standard header (which listRows already
   // accounts for): tabs (1) + the search row when shown (2 normally, 1 compact
   // since its margin goes too).
@@ -341,7 +330,7 @@ export function Library() {
           groups={groups}
           action={action}
           playingId={playingId}
-          focused={focused && !editing && !confirm}
+          focused={focused && !editing && !confirm && !renaming}
           reserveRows={reserveRows}
           deleteTargetsPlaying
           onDelete={(value) => {
@@ -357,7 +346,13 @@ export function Library() {
             const t = library.get(value);
             if (t) playTrack(t, visible);
           }}
-          getSelectedValue={setSelectedTrackId}
+          onRename={(value) => {
+            const t = library.get(value);
+            if (t) {
+              setRenamingTrackId(t.id);
+              setNewTrackTitle(t.title);
+            }
+          }}
         />
       )}
     </Box>

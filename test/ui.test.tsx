@@ -603,30 +603,45 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     expect(sections).toEqual(["download"]);
   });
 
-  it("library has rename state and handlers", () => {
-    const library = makeFakeLibrary();
+  it("library: t opens rename on the cursor row, gated off the list", async () => {
+    const played: string[] = [];
     const store = makeStore({
       region: "content",
-      library,
+      library: makeFakeLibrary(),
+      playTrack: (t) => played.push(t.title),
     });
-    const { lastFrame } = render(wrap(<LibrarySection />, store));
-    const frame = lastFrame() ?? "";
-    expect(frame).toContain("Library");
-    // The component should render without errors
-    expect(frame.length).toBeGreaterThan(0);
+    const { stdin, lastFrame } = render(wrap(<LibrarySection />, store));
+    await tick();
+    // Step off the shuffle action row onto the first song, then rename it.
+    stdin.write(DOWN);
+    await tick();
+    stdin.write("t");
+    await tick();
+    // The rename field (prefilled with the title) replaces the search hint.
+    expect(lastFrame() ?? "").not.toContain("Press / to search your library");
+    // The list is unfocused while the field is open: enter submits the rename
+    // (unchanged title = noop) instead of also playing the cursor row.
+    stdin.write("\r");
+    await tick();
+    expect(played).toEqual([]);
+    expect(lastFrame() ?? "").toContain("Press / to search your library");
   });
 
-  it("playlists has rename state and handlers", () => {
-    const library = makeFakeLibrary();
+  it("playlists: t opens the set rename prefilled with its name", async () => {
     const store = makeStore({
       region: "content",
       section: "playlists",
-      library,
+      library: makeFakeLibrary(),
     });
-    const { lastFrame } = render(wrap(<Playlists />, store));
-    const frame = lastFrame() ?? "";
-    expect(frame).toContain("Playlists");
-    // The component should render without errors
-    expect(frame.length).toBeGreaterThan(0);
+    const { stdin, lastFrame } = render(wrap(<Playlists />, store));
+    await tick();
+    stdin.write("t");
+    await tick();
+    // The rename field replaces the search hint row, prefilled with the name.
+    expect(lastFrame() ?? "").not.toContain("Press / to search your playlists");
+    // esc cancels without renaming.
+    stdin.write(ESC);
+    await escTick();
+    expect(lastFrame() ?? "").toContain("Press / to search your playlists");
   });
 });
