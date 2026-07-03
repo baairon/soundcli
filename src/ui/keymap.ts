@@ -73,6 +73,9 @@ export const HELP_GROUPS: HelpGroup[] = [
 ];
 
 const ALWAYS: Hint = { keys: "?", label: "Keys" };
+// tab is the one movement key the arrows can't cover (they belong to lists
+// and seeking), so every footer variant advertises it under the same name.
+const PANE: Hint = { keys: "tab", label: "Pane" };
 
 /**
  * The handful of hints worth showing inline for the current focus. Always ends
@@ -87,22 +90,25 @@ export function footerHints(
     return [
       { keys: "↑↓", label: "Move" },
       { keys: "↵", label: "Open" },
+      PANE,
       ALWAYS,
       { keys: "q", label: "Quit" },
     ];
   }
+  // In content, esc only mirrors tab (back to the sidebar), so the hint slot
+  // goes to tab; esc appears only where it means something else (songs depth).
   switch (section) {
     case "settings":
       return [
         { keys: "↵", label: "Choose" },
-        { keys: "esc", label: "Back" },
+        PANE,
         ALWAYS,
       ];
     case "download":
       // Download explains ↵ contextually in-section (choose / pause-resume), so
       // the footer stays neutral and never contradicts the in-list legend.
       return [
-        { keys: "esc", label: "Back" },
+        PANE,
         ALWAYS,
       ];
     case "playlists":
@@ -113,6 +119,7 @@ export function footerHints(
           { keys: "d", label: "Delete" },
           { keys: "t", label: "Rename" },
           { keys: "esc", label: "Back" },
+          PANE,
           ALWAYS,
         ];
       }
@@ -122,6 +129,7 @@ export function footerHints(
         { keys: "[ ]", label: "Source" },
         { keys: "d", label: "Delete" },
         { keys: "t", label: "Rename" },
+        PANE,
         ALWAYS,
       ];
     case "history":
@@ -130,6 +138,7 @@ export function footerHints(
         { keys: "/", label: "Search" },
         { keys: "[ ]", label: "Source" },
         { keys: "d", label: "Delete" },
+        PANE,
         ALWAYS,
       ];
     case "library":
@@ -139,7 +148,7 @@ export function footerHints(
         { keys: "[ ]", label: "Source" },
         { keys: "d", label: "Delete" },
         { keys: "t", label: "Rename" },
-        { keys: "esc", label: "Back" },
+        PANE,
         ALWAYS,
       ];
   }
