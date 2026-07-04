@@ -179,14 +179,19 @@ export function makeSoundcloud(input?: string): SourceAdapter {
       if (playlist.kind === "liked") {
         entries = entries.filter((e) => !isSetUrl(e.url as string));
       }
-      // Deleted tracks linger in feeds as bare api-v2 stubs; enqueueing them
-      // only manufactures guaranteed failures.
-      const beforeTombstones = entries.length;
-      entries = entries.filter((e) => !isSoundcloudTombstone(e));
-      if (entries.length < beforeTombstones) {
-        logSkippedTombstones(beforeTombstones - entries.length, playlist.title);
+      // Deleted tracks linger in *likes* feeds as bare api-v2 stubs; enqueueing
+      // those only manufactures guaranteed failures. Real SoundCloud sets can
+      // also contain bare api-v2 track URLs in yt-dlp's flat listing, though;
+      // yt-dlp resolves those just fine during download, so keep them outside
+      // the liked feed.
+      if (playlist.kind === "liked") {
+        const beforeTombstones = entries.length;
+        entries = entries.filter((e) => !isSoundcloudTombstone(e));
+        if (entries.length < beforeTombstones) {
+          logSkippedTombstones(beforeTombstones - entries.length, playlist.title);
+        }
       }
-      // A pasted set link starts with a slug-guessed title; once fetched, the
+
       // feed's real set name is better. (Never for "liked" — that's our label.)
       const playlistTitle =
         playlist.id === "single" ? col.title || playlist.title : playlist.title;
