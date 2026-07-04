@@ -34,6 +34,19 @@ Every track downloads in its original quality, with album artwork and artist det
 
 It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. Once a track is saved, it's there for good.
 
+## Rate limiting & batch downloads
+
+To avoid overwhelming platforms, soundcli downloads in batches with automatic cooldowns:
+
+- **YouTube/Spotify**: 80 tracks per batch, then 30-minute cooldown
+- **SoundCloud**: 160 tracks per batch, then 15-minute cooldown
+
+When a batch completes, downloads pause automatically and a countdown shows when the next batch starts. The queue resumes on its own—no manual intervention needed. If a platform rate-limits early (e.g., HTTP 429), the cooldown triggers immediately with the exact error message displayed.
+
+Batch progress is shown in the Download section:
+- `• YouTube: 65/80 left in batch` - tracks remaining in current batch
+- `• YouTube: batch complete  •  Next batch in 18:45` - cooldown countdown (MM:SS)
+
 ## Playing it back
 
 Everything runs from the keyboard, with controls that are quick to pick up. Press `?` anytime for the full list of keys. The bar along the bottom of the screen only shows the few that matter right now, so there's nothing to memorize.

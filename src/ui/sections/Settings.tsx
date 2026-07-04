@@ -17,8 +17,6 @@ type Mode =
   | "youtube"
   | "soundcloud"
   | "spotify"
-  | "batch-youtube"
-  | "batch-soundcloud"
   | "wipe-all";
 
 export function Settings() {
@@ -56,16 +54,6 @@ export function Settings() {
         ? `@${config.spotifyHandle}`
         : "not set",
       set: Boolean(config.spotifyHandle),
-    },
-    {
-      value: "batch-youtube",
-      name: "YouTube/Spotify batch",
-      detail: config.batchLimits?.youtube?.toString() ?? "80 (default)",
-    },
-    {
-      value: "batch-soundcloud",
-      name: "SoundCloud batch",
-      detail: config.batchLimits?.soundcloud?.toString() ?? "160 (default)",
     },
     {
       value: "open-folder",
@@ -110,8 +98,7 @@ export function Settings() {
   // can't toggle the player mid-confirmation.
   const inSubPage = focused && mode !== "menu";
   const isTextPage =
-    mode === "youtube" || mode === "soundcloud" || mode === "spotify" ||
-    mode === "batch-youtube" || mode === "batch-soundcloud";
+    mode === "youtube" || mode === "soundcloud" || mode === "spotify";
   useEffect(() => {
     setCaptureMode(!inSubPage ? "none" : isTextPage ? "text" : "picker");
     return () => setCaptureMode("none");
@@ -205,71 +192,6 @@ export function Settings() {
       "spotifyHandle",
       "Your Spotify handle",
       config.spotifyHandle,
-    );
-  }
-
-  if (mode === "batch-youtube") {
-    return frame(
-      "YouTube/Spotify batch limit",
-      <Box flexDirection="column">
-        <Box marginBottom={1} flexDirection="column">
-          <Text dimColor>{`${ICON.dot} Maximum 80% of platform rate limit for safety`}</Text>
-          <Text dimColor>{`${ICON.dot} Platform limit: ~100 requests/hour`}</Text>
-          <Text dimColor>{`${ICON.dot} Maximum allowed: 80 tracks`}</Text>
-          <Text dimColor>{`${ICON.dot} Spotify downloads via YouTube matching`}</Text>
-          <Text dimColor>{`${ICON.dot} Leave empty to use default (80)`}</Text>
-        </Box>
-        <Box marginTop={1}>
-          <TextField
-            isDisabled={!focused}
-            defaultValue={config.batchLimits?.youtube?.toString() ?? ""}
-            placeholder="80"
-            onSubmit={(v) => {
-              const num = v.trim() ? parseInt(v, 10) : undefined;
-              if (num !== undefined && (isNaN(num) || num < 1 || num > 80)) {
-                return; // Invalid, don't save
-              }
-              setConfig({
-                ...config,
-                batchLimits: { ...config.batchLimits, youtube: num },
-              });
-              setMode("menu");
-            }}
-          />
-        </Box>
-      </Box>,
-    );
-  }
-
-  if (mode === "batch-soundcloud") {
-    return frame(
-      "SoundCloud batch limit",
-      <Box flexDirection="column">
-        <Box marginBottom={1} flexDirection="column">
-          <Text dimColor>{`${ICON.dot} Maximum 80% of platform rate limit for safety`}</Text>
-          <Text dimColor>{`${ICON.dot} Platform limit: ~200-300 requests/hour`}</Text>
-          <Text dimColor>{`${ICON.dot} Maximum allowed: 160 tracks`}</Text>
-          <Text dimColor>{`${ICON.dot} Leave empty to use default (160)`}</Text>
-        </Box>
-        <Box marginTop={1}>
-          <TextField
-            isDisabled={!focused}
-            defaultValue={config.batchLimits?.soundcloud?.toString() ?? ""}
-            placeholder="160"
-            onSubmit={(v) => {
-              const num = v.trim() ? parseInt(v, 10) : undefined;
-              if (num !== undefined && (isNaN(num) || num < 1 || num > 160)) {
-                return;
-              }
-              setConfig({
-                ...config,
-                batchLimits: { ...config.batchLimits, soundcloud: num },
-              });
-              setMode("menu");
-            }}
-          />
-        </Box>
-      </Box>,
     );
   }
 
