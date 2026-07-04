@@ -58,6 +58,12 @@ export interface EnqueueInput {
 
 export interface QueueStats {
   total: number;
+  /** Tracks considered in the current batch, including already-saved items. */
+  inputTotal: number;
+  /** Input tracks that were already represented in the library. */
+  alreadySaved: number;
+  /** Input tracks that require a real network download. */
+  newTracks: number;
   finished: number;
   done: number;
   skipped: number;
@@ -125,6 +131,9 @@ export class DownloadQueue extends EventEmitter {
   private stopped = false;
   private clearedDone = 0;
   private clearedSkipped = 0;
+  private batchInputTotal = 0;
+  private batchAlreadySaved = 0;
+  private batchNewTracks = 0;
   private readonly controllers = new Map<string, AbortController>();
   /** Item ids being paused (vs canceled) so run() knows the intent on abort. */
   private readonly pausing = new Set<string>();
@@ -216,6 +225,9 @@ export class DownloadQueue extends EventEmitter {
     const finished = done + skipped + failed + canceled;
     return {
       total,
+      inputTotal: this.batchInputTotal || total,
+      alreadySaved: this.batchAlreadySaved,
+      newTracks: this.batchNewTracks || Math.max(0, total - this.batchAlreadySaved),
       finished,
       done,
       skipped,
@@ -292,6 +304,9 @@ export class DownloadQueue extends EventEmitter {
     );
     this.clearedDone = 0;
     this.clearedSkipped = 0;
+    this.batchInputTotal = 0;
+    this.batchAlreadySaved = 0;
+    this.batchNewTracks = 0;
     if (this.runStartedAt !== null) {
       this.runStartedAt = Date.now();
       const st = this.stats();
@@ -310,6 +325,9 @@ export class DownloadQueue extends EventEmitter {
     this.items = [];
     this.clearedDone = 0;
     this.clearedSkipped = 0;
+    this.batchInputTotal = 0;
+    this.batchAlreadySaved = 0;
+    this.batchNewTracks = 0;
     this.rateLimited = false;
     this.rateLimitReason = "";
     this.permanentStreaks.clear();
@@ -543,15 +561,25 @@ export class DownloadQueue extends EventEmitter {
     this.gatherController = new AbortController();
     return this.gatherController.signal;
   }
-
   /**
-   * Add tracks, skipping any already in the library or already queued. Returns
-   * how many were actually added vs skipped as duplicates.
+   * Add tracks to the queue while de-duping against the library, current
+   * queue, and same-title/artist matches from other sources. The return tells UI
+   * how many were actually added vs skipped as duplicates, while separating
+   * already-saved playlist materialization from genuinely new downloads.
    */
-  enqueue(inputs: EnqueueInput[]): { added: number; skipped: number } {
+  enqueue(inputs: EnqueueInput[]): {
+    total: number;
+    added: number;
+    skipped: number;
+    alreadySaved: number;
+    newTracks: number;
+  } {
     if (this.items.length === 0) {
       this.clearedDone = 0;
       this.clearedSkipped = 0;
+      this.batchInputTotal = 0;
+      this.batchAlreadySaved = 0;
+      this.batchNewTracks = 0;
     }
     this.stopped = false;
     this.rateLimited = false;
@@ -559,8 +587,13 @@ export class DownloadQueue extends EventEmitter {
     const blocked = new Set<string>();
     // Signatures of songs we already own or have queued, so the *same song*
     // never downloads twice even under a different id or from another source.
+    const ownedSignatures = new Set<string>();
     const signatures = new Set<string>();
-    for (const t of this.library.all()) signatures.add(trackSignature(t));
+    for (const t of this.library.all()) {
+      const sig = trackSignature(t);
+      ownedSignatures.add(sig);
+      signatures.add(sig);
+    }
     for (const i of this.items) {
       if (
         i.status === "pending" ||
@@ -575,6 +608,8 @@ export class DownloadQueue extends EventEmitter {
 
     let added = 0;
     let skipped = 0;
+    let alreadySaved = 0;
+    let newTracks = 0;
     for (const inp of inputs) {
       const id = libId(inp.source, inp.track.id, inp.track.owner);
       const sig = trackSignature({ ...inp.track, source: inp.source });
@@ -587,9 +622,13 @@ export class DownloadQueue extends EventEmitter {
       ) {
         // Already downloaded elsewhere, but this playlist folder is incomplete:
         // queue a local copy operation rather than hiding the track as a skip.
+        alreadySaved++;
       } else if (inLibrary || blocked.has(id) || signatures.has(sig)) {
+        if (inLibrary || ownedSignatures.has(sig)) alreadySaved++;
         skipped++;
         continue;
+      } else {
+        newTracks++;
       }
       blocked.add(id);
       signatures.add(sig);
@@ -604,10 +643,14 @@ export class DownloadQueue extends EventEmitter {
       added++;
     }
 
+    this.batchInputTotal += inputs.length;
+    this.batchAlreadySaved += alreadySaved;
+    this.batchNewTracks += newTracks;
+
     this.emit("update");
     this.scheduleSave();
     this.pump();
-    return { added, skipped };
+    return { total: inputs.length, added, skipped, alreadySaved, newTracks };
   }
 
   private pump(): void {

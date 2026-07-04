@@ -79,6 +79,12 @@ describe("download queue dedupe", () => {
     ]);
     expect(r.added).toBe(2);
     expect(r.skipped).toBe(2);
+    expect(r.total).toBe(4);
+    expect(r.alreadySaved).toBe(1);
+    expect(r.newTracks).toBe(2);
+    expect(q.stats().inputTotal).toBe(4);
+    expect(q.stats().alreadySaved).toBe(1);
+    expect(q.stats().newTracks).toBe(2);
   });
 
   it("skips tracks already in the queue on a later enqueue", () => {
@@ -165,6 +171,11 @@ describe("download queue dedupe", () => {
     ]);
     expect(r.added).toBe(1);
     expect(r.skipped).toBe(0);
+    expect(r.alreadySaved).toBe(1);
+    expect(r.newTracks).toBe(0);
+    expect(q.stats().inputTotal).toBe(1);
+    expect(q.stats().alreadySaved).toBe(1);
+    expect(q.stats().newTracks).toBe(0);
     await new Promise((res) => setTimeout(res, 60));
 
     const copied = path.join(root, "SoundCloud", "owner1", "Set A", "Artist - Song.m4a");

@@ -105,6 +105,13 @@ describe("single-page sections render", () => {
     expect(frame).toContain("Music folder");
   });
 
+  it("settings exposes the duplicate doctor", () => {
+    const store = makeStore();
+    const { lastFrame } = render(wrap(<Settings />, store));
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Duplicate doctor");
+  });
+
   it("settings shows values inline after the label column", () => {
     const store = makeStore({
       region: "content",
