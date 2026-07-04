@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
-import { basename, dirname } from "node:path";
-import { promises as fs } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import type { Config } from "../config/config";
 import { downloadLogFile } from "../config/paths";
 import type { Library } from "../library/library";
@@ -15,6 +15,7 @@ import {
 } from "../ytdlp/ytdlp";
 import type { DownloadProgress } from "../ytdlp/progress";
 import { resolveSpotifyDownloadUrl } from "../sources/spotify/resolve";
+import { sanitizeName } from "../ytdlp/args";
 import {
   restorableItems,
   saveQueue,
@@ -410,6 +411,54 @@ export class DownloadQueue extends EventEmitter {
     if (this.failingSource === label) this.failingSource = null;
   }
 
+  /** Folder where this item should live when it came from a playlist/set. */
+  private playlistFolder(item: EnqueueInput | QueueItem): string | undefined {
+    const playlist = item.track.playlistTitle;
+    if (!playlist) return undefined;
+    return join(
+      this.config.libraryDir,
+      item.sourceLabel,
+      ...(item.track.owner ? [sanitizeName(item.track.owner)] : []),
+      sanitizeName(playlist),
+    );
+  }
+
+  /** True when the existing library file already lives in this requested folder. */
+  private isInRequestedFolder(existing: Track, item: EnqueueInput | QueueItem): boolean {
+    const folder = this.playlistFolder(item);
+    if (!folder) return true;
+    return resolve(dirname(existing.filePath)) === resolve(folder);
+  }
+
+  /**
+   * If a track is already downloaded from another playlist (usually Liked Songs),
+   * copy the local file into this playlist's folder instead of silently skipping
+   * it. Playlist folders are part of the library's promise: selecting a set
+   * should leave that set complete on disk even when some songs were saved before.
+   */
+  private async materializeExisting(item: QueueItem): Promise<boolean> {
+    const get = (this.library as Library & { get?: (id: string) => Track | undefined }).get;
+    const existing = typeof get === "function"
+      ? get.call(this.library, libId(item.source, item.track.id, item.track.owner))
+      : undefined;
+    const folder = this.playlistFolder(item);
+    if (!existing || !folder) return false;
+    if (this.isInRequestedFolder(existing, item)) return true;
+
+    const source = existing.filePath;
+    const target = join(folder, basename(source));
+    try {
+      await fs.mkdir(folder, { recursive: true });
+      await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
+      return true;
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === "EEXIST") return true;
+      if (err.code === "ENOENT") return false;
+      throw e;
+    }
+  }
+
   pauseAll(): void {
     // A manual pause also clears the throttle banner.
     this.rateLimited = false;
@@ -529,7 +578,16 @@ export class DownloadQueue extends EventEmitter {
     for (const inp of inputs) {
       const id = libId(inp.source, inp.track.id, inp.track.owner);
       const sig = trackSignature({ ...inp.track, source: inp.source });
-      if (this.library.has(id) || blocked.has(id) || signatures.has(sig)) {
+      const inLibrary = this.library.has(id);
+      const existing = inLibrary ? this.library.get(id) : undefined;
+      if (
+        existing &&
+        !blocked.has(id) &&
+        !this.isInRequestedFolder(existing, inp)
+      ) {
+        // Already downloaded elsewhere, but this playlist folder is incomplete:
+        // queue a local copy operation rather than hiding the track as a skip.
+      } else if (inLibrary || blocked.has(id) || signatures.has(sig)) {
         skipped++;
         continue;
       }
@@ -648,8 +706,16 @@ export class DownloadQueue extends EventEmitter {
     // its twin finished): skip instantly without touching the network, so a
     // re-run never re-sifts songs you already have.
     if (this.library.has(libId(item.source, item.track.id, item.track.owner))) {
-      item.status = "skipped";
-      item.percent = 100;
+      item.status = "downloading";
+      this.emit("update");
+      try {
+        item.status = (await this.materializeExisting(item)) ? "done" : "skipped";
+        item.percent = 100;
+      } catch (e) {
+        item.status = "error";
+        item.error = e instanceof Error ? e.message : String(e);
+        this.logFailure(item, item.error);
+      }
       this.clearIfFinished(item);
       this.emit("update");
       this.scheduleSave();

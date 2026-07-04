@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // Run per-track retry backoffs with zero delay so timing assertions stay fast.
 beforeAll(() => {
@@ -61,6 +64,7 @@ function spotifyInput(id: string) {
 // Library that reports one track as already saved and is otherwise empty.
 const fakeLib = {
   has: (id: string) => id === "youtube:already",
+  get: () => undefined,
   all: () => [],
 } as unknown as Library;
 
@@ -106,7 +110,7 @@ describe("download queue dedupe", () => {
     expect(r.skipped).toBe(0);
   });
 
-  it("dedupes same owner likes and set", () => {
+  it("dedupes same owner likes and set within the same batch", () => {
     const q = new DownloadQueue(defaultConfig, fakeLib, 1);
     const a = input("youtube", "yt1", "Song", "Artist");
     a.track.owner = "owner1";
@@ -117,6 +121,58 @@ describe("download queue dedupe", () => {
     const r = q.enqueue([a, b]);
     expect(r.added).toBe(1);
     expect(r.skipped).toBe(1);
+  });
+
+  it("copies an already-downloaded track into a requested playlist folder", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-q-"));
+    const liked = path.join(root, "SoundCloud", "owner1", "Liked Songs");
+    const src = path.join(liked, "Artist - Song.m4a");
+    await fs.mkdir(liked, { recursive: true });
+    await fs.writeFile(src, "audio");
+
+    const existing = {
+      id: "soundcloud:owner1:sc1",
+      source: "soundcloud" as SourceId,
+      sourceTrackId: "sc1",
+      title: "Song",
+      artist: "Artist",
+      filePath: src,
+      playlist: "Liked Songs",
+      owner: "owner1",
+      addedAt: new Date().toISOString(),
+    };
+    const lib = {
+      has: (id: string) => id === existing.id,
+      get: (id: string) => (id === existing.id ? existing : undefined),
+      all: () => [existing],
+      upsert: vi.fn(async () => {}),
+    } as unknown as Library;
+    const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
+    vi.mocked(downloadTrack).mockClear();
+    const r = q.enqueue([
+      {
+        source: "soundcloud",
+        sourceLabel: "SoundCloud",
+        track: {
+          id: "sc1",
+          title: "Song",
+          artist: "Artist",
+          downloadUrl: "https://soundcloud.com/a/song",
+          owner: "owner1",
+          playlistTitle: "Set A",
+        },
+      },
+    ]);
+    expect(r.added).toBe(1);
+    expect(r.skipped).toBe(0);
+    await new Promise((res) => setTimeout(res, 60));
+
+    const copied = path.join(root, "SoundCloud", "owner1", "Set A", "Artist - Song.m4a");
+    await expect(fs.readFile(copied, "utf8")).resolves.toBe("audio");
+    expect(vi.mocked(downloadTrack)).not.toHaveBeenCalled();
+    expect(q.getItems().length).toBe(0);
+    expect(q.stats().done).toBe(1);
+    await fs.rm(root, { recursive: true, force: true });
   });
 });
 
