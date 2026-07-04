@@ -234,6 +234,18 @@ export class DownloadQueue extends EventEmitter {
     private ensureTools: () => Promise<void> = async () => {},
   ) {
     super();
+    // Start periodic check for auto-resume of rate-limited sources
+    this.startResumeCheck();
+  }
+
+  /** Start periodic check for scheduled resumes (auto-retry after cooldown). */
+  private startResumeCheck(): void {
+    // Check every 5 seconds for expired schedules
+    setInterval(() => {
+      this.checkScheduledResumes().catch((e) => {
+        console.error("Error checking scheduled resumes:", e);
+      });
+    }, 5000);
   }
 
   /** Persist the unfinished queue to disk, debounced (resume across restart). */
@@ -425,7 +437,7 @@ export class DownloadQueue extends EventEmitter {
 
   /**
    * Check for sources whose scheduled resume time has arrived and resume them.
-   * Called on app startup to auto-resume rate-limited sources.
+   * Called on app startup and periodically during runtime to auto-resume rate-limited sources.
    */
   async checkScheduledResumes(): Promise<void> {
     const { loadAllSchedules, clearSchedule } = await import("./resume-schedule");
@@ -449,6 +461,9 @@ export class DownloadQueue extends EventEmitter {
         if (resumed > 0) {
           // Reset batch count for the resumed source to start fresh
           this.perSourceCounts.set(schedule.source, 0);
+          this.rateLimited = false;
+          this.rateLimitReason = "";
+          this.rateLimitResumeAt = 0;
           this.emit("update"); // Emit update so UI reflects batch count reset
           this.stopped = false;
           this.consecutiveErrors = 0;

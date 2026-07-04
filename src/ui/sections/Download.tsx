@@ -428,9 +428,9 @@ function QueueView() {
                 ? "Waiting for the audio engine (install ffmpeg if this persists)"
                 : s.rateLimitReason
             }`}
-            {s.rateLimitResumeAt > 0 ? (
+            {cooldownSeconds !== null ? (
               <Text dimColor>
-                {`  ${ICON.dot}  Retry in ${Math.ceil((s.rateLimitResumeAt - Date.now()) / 60000)} min`}
+                {`  ${ICON.dot}  Retry in ${Math.floor(cooldownSeconds / 60)}:${(cooldownSeconds % 60).toString().padStart(2, '0')}`}
               </Text>
             ) : null}
             <Text dimColor>{`  ${ICON.dot}  ] resumes`}</Text>
@@ -486,10 +486,24 @@ function QueueView() {
           {Array.from(batchProgressBySource.entries()).map(([sourceLabel, batch]) => {
             const batchRemaining = Math.max(0, batch.limit - batch.current);
             const approachingLimit = batchRemaining <= 5;
+            const batchEmpty = batch.current >= batch.limit;
             return (
               <Text key={sourceLabel} dimColor>
-                {`${ICON.dot} ${sourceLabel}: ${batchRemaining}/${batch.limit} left in batch`}
-                {approachingLimit ? <Text color={COLOR.warn}> {ICON.warn}</Text> : null}
+                {batchEmpty ? (
+                  <>
+                    {`${ICON.dot} ${sourceLabel}: batch complete`}
+                    {cooldownSeconds !== null ? (
+                      <Text color={COLOR.warn}>
+                        {`  ${ICON.dot}  Next batch in ${Math.floor(cooldownSeconds / 60)}:${(cooldownSeconds % 60).toString().padStart(2, '0')}`}
+                      </Text>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {`${ICON.dot} ${sourceLabel}: ${batchRemaining}/${batch.limit} left in batch`}
+                    {approachingLimit ? <Text color={COLOR.warn}> {ICON.warn}</Text> : null}
+                  </>
+                )}
               </Text>
             );
           })}
