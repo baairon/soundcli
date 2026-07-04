@@ -140,6 +140,37 @@ describe("soundcloud tombstone filtering", () => {
     );
     expect(tracks.map((t) => t.id)).toEqual(["1", "2"]);
   });
+
+  it("keeps api-v2 track URLs in real sets because yt-dlp resolves them", async () => {
+    enumerateMock.mockResolvedValue({
+      title: "beach set",
+      entries: [
+        {
+          id: "900000004",
+          title: "Ashen - Drifting",
+          url: "https://soundcloud.com/xxxashenxxx/ashen-drifting",
+        },
+        {
+          id: "900000002",
+          title: "900000002",
+          url: "https://api-v2.soundcloud.com/tracks/900000002",
+        },
+        {
+          id: "900000003",
+          title: "",
+          url: "https://api-v2.soundcloud.com/tracks/900000003",
+        },
+      ],
+    });
+    const sc = makeSoundcloud("https://soundcloud.com/demolistener/sets/beach-set");
+    const lists = await sc.listPlaylists();
+    const tracks = await sc.listTracks(lists[0]!);
+    expect(tracks.map((t) => t.id)).toEqual([
+      "900000004",
+      "900000002",
+      "900000003",
+    ]);
+  });
 });
 
 describe("pasted collection keeps its real fetched name", () => {
