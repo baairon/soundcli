@@ -371,6 +371,10 @@ function QueueView() {
           ? "Canceled"
           : "All done";
   const saved = s.done + s.skipped;
+  const batchBreakdown =
+    s.inputTotal > s.total || s.alreadySaved > 0
+      ? `${s.inputTotal.toLocaleString()} tracks  ${ICON.dot}  ${s.alreadySaved.toLocaleString()} already saved  ${ICON.dot}  ${s.newTracks.toLocaleString()} new`
+      : `${saved.toLocaleString()} of ${s.total.toLocaleString()} saved`;
 
   // Only surface commands that would actually do something right now, so the
   // footer stays a short contextual hint instead of a wall of every key. Nav
@@ -423,7 +427,7 @@ function QueueView() {
             {title}
           </Text>
           <Text dimColor>
-            {`  ${ICON.dot}  ${saved.toLocaleString()} of ${s.total.toLocaleString()} saved`}
+            {`  ${ICON.dot}  ${batchBreakdown}`}
           </Text>
           {s.paused ? (
             <Text color={COLOR.warn}>{`  ${ICON.dot}  ${s.paused.toLocaleString()} paused`}</Text>
@@ -972,7 +976,14 @@ export function Download() {
         })),
       );
       if (r.added > 0) setStep({ name: "queue" });
-      else setStep({ name: "info", message: "Nothing new to download." });
+      else
+        setStep({
+          name: "info",
+          message:
+            r.alreadySaved > 0
+              ? `${r.total.toLocaleString()} tracks, all already saved.`
+              : "Nothing new to download.",
+        });
     } catch (e) {
       setStep({
         name: "error",

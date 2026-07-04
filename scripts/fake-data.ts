@@ -95,6 +95,9 @@ export class FakeQueue extends EventEmitter {
     const downloading = c("downloading");
     return {
       total,
+      inputTotal: total,
+      alreadySaved: c("skipped"),
+      newTracks: Math.max(0, total - c("skipped")),
       finished,
       done: c("done"),
       skipped: c("skipped"),
