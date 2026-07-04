@@ -286,15 +286,38 @@ function QueueView() {
   const s = queue.stats();
   const focused = region === "content";
   const [offset, setOffset] = useState(0);
+  const [cooldownSeconds, setCooldownSeconds] = useState<number | null>(null);
+
+  // Animated countdown for rate limit cooldown
+  useEffect(() => {
+    if (!s.rateLimited || s.rateLimitResumeAt <= 0) {
+      setCooldownSeconds(null);
+      return;
+    }
+
+    const updateCooldown = () => {
+      const remaining = Math.max(0, s.rateLimitResumeAt - Date.now());
+      setCooldownSeconds(Math.ceil(remaining / 1000));
+    };
+
+    updateCooldown();
+    const interval = setInterval(updateCooldown, 1000);
+
+    return () => clearInterval(interval);
+  }, [s.rateLimited, s.rateLimitResumeAt]);
 
   // Calculate batch progress per source
   const batchProgressBySource = useMemo(() => {
     const progress = new Map<string, { current: number; limit: number }>();
+    const sources = new Set<SourceId>();
     for (const item of items) {
       if (item.status === "downloading" || item.status === "done" || item.status === "pending" || item.status === "paused") {
-        const current = queue.getBatchCount(item.source);
-        const limit = queue.getBatchLimit(item.source);
-        progress.set(item.sourceLabel, { current, limit });
+        if (!sources.has(item.source)) {
+          sources.add(item.source);
+          const current = queue.getBatchCount(item.source);
+          const limit = queue.getBatchLimit(item.source);
+          progress.set(item.sourceLabel, { current, limit });
+        }
       }
     }
     return progress;
@@ -403,8 +426,14 @@ function QueueView() {
             {`${ICON.warn} ${
               s.rateLimitReason === WAITING_FOR_TOOLS
                 ? "Waiting for the audio engine (install ffmpeg if this persists)"
-                : "Rate-limited, wait a while"
-            }  ${ICON.dot}  ] resumes`}
+                : s.rateLimitReason
+            }`}
+            {s.rateLimitResumeAt > 0 ? (
+              <Text dimColor>
+                {`  ${ICON.dot}  Retry in ${Math.ceil((s.rateLimitResumeAt - Date.now()) / 60000)} min`}
+              </Text>
+            ) : null}
+            <Text dimColor>{`  ${ICON.dot}  ] resumes`}</Text>
           </Text>
         </Box>
       ) : s.failingSource ? (

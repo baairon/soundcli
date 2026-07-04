@@ -160,6 +160,7 @@ export interface DownloadParams {
 export interface DownloadResult {
   status: "downloaded" | "already" | "canceled" | "ratelimited";
   meta?: TrackMeta;
+  error?: string;
 }
 
 /** Whether an error looks like the platform rate-limiting / bot-gating us. */
@@ -273,7 +274,7 @@ export async function downloadTrack(
   }
   if (result.exitCode !== 0) {
     const msg = errLines.slice(-5).join(" | ");
-    if (isRateLimitError(msg)) return { status: "ratelimited" };
+    if (isRateLimitError(msg)) return { status: "ratelimited", error: msg };
     throw new Error(`yt-dlp failed (exit ${result.exitCode}): ${msg}`);
   }
   if (meta) {

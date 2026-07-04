@@ -74,6 +74,8 @@ export interface QueueStats {
   paused: number;
   rateLimited: boolean;
   rateLimitReason: string;
+  /** Timestamp (ms) when rate-limited source can resume, or 0 if not rate-limited. */
+  rateLimitResumeAt: number;
   /** Source label whose downloads keep permanently failing, or null. */
   failingSource: string | null;
   overallPercent: number;
@@ -183,6 +185,8 @@ export class DownloadQueue extends EventEmitter {
   /** Set when the platform rate-limited us and we paused the queue. */
   private rateLimited = false;
   private rateLimitReason = "";
+  /** Timestamp (ms) when rate-limited source can resume, or 0 if not rate-limited. */
+  private rateLimitResumeAt = 0;
   /** Wall-clock start of the current run window (null while idle), for the ETA. */
   private runStartedAt: number | null = null;
   /** `done` count when the current run window began, so the ETA rate is per-run. */
@@ -292,6 +296,7 @@ export class DownloadQueue extends EventEmitter {
       paused,
       rateLimited: this.rateLimited,
       rateLimitReason: this.rateLimitReason,
+      rateLimitResumeAt: this.rateLimitResumeAt,
       failingSource: this.failingSource,
       overallPercent: total ? Math.round((finished / total) * 100) : 0,
       etaSeconds: this.estimateEta(done, downloading, pending),
@@ -378,6 +383,7 @@ export class DownloadQueue extends EventEmitter {
     this.clearedSkipped = 0;
     this.rateLimited = false;
     this.rateLimitReason = "";
+    this.rateLimitResumeAt = 0;
     this.permanentStreaks.clear();
     this.failingSource = null;
     this.stopped = false;
@@ -410,6 +416,7 @@ export class DownloadQueue extends EventEmitter {
     this.stopped = false;
     this.rateLimited = false;
     this.rateLimitReason = "";
+    this.rateLimitResumeAt = 0;
     this.consecutiveErrors = 0;
     this.emit("update");
     this.scheduleSave();
@@ -442,6 +449,7 @@ export class DownloadQueue extends EventEmitter {
         if (resumed > 0) {
           // Reset batch count for the resumed source to start fresh
           this.perSourceCounts.set(schedule.source, 0);
+          this.emit("update"); // Emit update so UI reflects batch count reset
           this.stopped = false;
           this.consecutiveErrors = 0;
           this.emit("update");
@@ -467,6 +475,7 @@ export class DownloadQueue extends EventEmitter {
     this.stopped = false;
     this.rateLimited = false;
     this.rateLimitReason = "";
+    this.rateLimitResumeAt = 0;
     this.consecutiveErrors = 0;
     this.emit("update");
     this.scheduleSave();
@@ -482,10 +491,13 @@ export class DownloadQueue extends EventEmitter {
     const remaining = this.items.filter(
       (i) => i.source === source && (i.status === "pending" || i.status === "downloading"),
     ).length;
-    
-    // Schedule a resume for this source
-    await scheduleResume(source, sourceLabel, remaining, reason);
-    
+
+    // Schedule a resume for this source and capture the resume time
+    const resumeAt = await scheduleResume(source, sourceLabel, remaining, reason);
+    this.rateLimited = true;
+    this.rateLimitReason = reason;
+    this.rateLimitResumeAt = resumeAt;
+
     // Pause only items from this source
     for (const i of this.items) {
       if (i.source === source) {
@@ -525,6 +537,7 @@ export class DownloadQueue extends EventEmitter {
     // A manual pause also clears the throttle banner.
     this.rateLimited = false;
     this.rateLimitReason = "";
+    this.rateLimitResumeAt = 0;
     for (const i of this.items) {
       if (i.status === "pending" || i.status === "downloading") this.pause(i.id);
     }
@@ -624,6 +637,7 @@ export class DownloadQueue extends EventEmitter {
     this.stopped = false;
     this.rateLimited = false;
     this.rateLimitReason = "";
+    this.rateLimitResumeAt = 0;
     const blocked = new Set<string>();
     // Signatures of songs we already own or have queued, so the *same song*
     // never downloads twice even under a different id or from another source.
@@ -872,7 +886,7 @@ export class DownloadQueue extends EventEmitter {
       if (res.status === "ratelimited") {
         // Don't fail it: keep it (with its .part) and pause this source.
         item.status = "paused";
-        await this.onRateLimited(item.source, item.sourceLabel, "rate limited by platform");
+        await this.onRateLimited(item.source, item.sourceLabel, res.error || "rate limited by platform");
       } else if (res.status === "canceled") {
         // Distinguish a pause (keep it, resumable) from a real cancel.
         item.status = this.pausing.has(item.id) ? "paused" : "canceled";
@@ -939,6 +953,7 @@ export class DownloadQueue extends EventEmitter {
           // Check per-source pagination limit
           const count = (this.perSourceCounts.get(item.source) ?? 0) + 1;
           this.perSourceCounts.set(item.source, count);
+          this.emit("update"); // Emit update so UI reflects batch count change
           const batchLimit = getBatchLimit(item.source, this.config);
           if (count >= batchLimit) {
             // Schedule a pause for this source to avoid rate limits
@@ -963,6 +978,24 @@ export class DownloadQueue extends EventEmitter {
         item.status = "skipped";
         this.consecutiveErrors = 0;
         this.noteSourceSuccess(item.sourceLabel);
+
+        // Increment batch count for skipped items too (they still hit the API)
+        const count = (this.perSourceCounts.get(item.source) ?? 0) + 1;
+        this.perSourceCounts.set(item.source, count);
+        this.emit("update"); // Emit update so UI reflects batch count change
+        const batchLimit = getBatchLimit(item.source, this.config);
+        if (count >= batchLimit) {
+          const remaining = this.items.filter(
+            (i) => i.source === item.source && (i.status === "pending" || i.status === "downloading"),
+          ).length;
+          await scheduleResume(item.source, item.sourceLabel, remaining, `batch limit reached (${batchLimit})`);
+          for (const i of this.items) {
+            if (i.source === item.source && i.status === "pending") {
+              i.status = "paused";
+              i.percent = 0;
+            }
+          }
+        }
       }
     } catch (e) {
       item.status = "error";
