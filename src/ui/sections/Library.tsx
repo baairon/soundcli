@@ -247,19 +247,19 @@ export function Library() {
 
   let groups: SongGroup[];
   if (searching) {
-    groups = [{ items: visible.slice(0, 200).map(toItem) }];
+    groups = [{ items: visible.map(toItem) }];
   } else if (filter === "all" && presentSources.length > 1) {
     groups = presentSources
       .map((src) => {
         const tracks = inSource.filter((t) => srcOf(t) === src);
         return {
           title: `${SOURCE_LABELS[src]}  ${ICON.dot}  ${tracks.length}`,
-          items: tracks.slice(0, 80).map(toItem),
+          items: tracks.map(toItem),
         };
       })
       .filter((g) => g.items.length > 0);
   } else {
-    groups = [{ items: visible.slice(0, 200).map(toItem) }];
+    groups = [{ items: visible.map(toItem) }];
   }
 
   const subtitle = `${visible.length.toLocaleString()} song${visible.length === 1 ? "" : "s"}`;
