@@ -109,6 +109,16 @@ export function Playlists() {
       }
       s.tracks.push(t);
     }
+    // Inside a set, mirror the source feed's order (restamped by every
+    // "download all"); tracks without a position (adopted strays, singles)
+    // keep their newest-first order at the end since the sort is stable.
+    for (const s of ordered) {
+      s.tracks.sort(
+        (a, b) =>
+          (a.playlistPos ?? Number.MAX_SAFE_INTEGER) -
+          (b.playlistPos ?? Number.MAX_SAFE_INTEGER),
+      );
+    }
     return ordered;
   }, [songs, config.libraryDir]);
 
@@ -355,7 +365,9 @@ export function Playlists() {
       .filter(Boolean)
       .join(`  ${ICON.dot}  `);
     const sn = shown.length;
-    const showSongSearchRow = songFiltering || sq.length > 0;
+    // Same visibility rule as Library and the sets view: the idle search hint
+    // stays visible when expanded and yields its row back when compact.
+    const showSongSearchRow = !compact || songFiltering || sq.length > 0;
     return (
       <Box flexDirection="column">
         <Header title={setLabel(active)} subtitle={subtitle} focused={focused} />
@@ -387,7 +399,7 @@ export function Playlists() {
             ) : (
               <Box flexGrow={1} minWidth={0}>
                 <Text dimColor wrap="truncate-end">
-                  {songQ}
+                  {songQ || "Press / to search…"}
                 </Text>
               </Box>
             )}
@@ -417,10 +429,16 @@ export function Playlists() {
                 : undefined
             }
             numbered
-            actionGap={sn > 1}
             playingId={playingId}
             focused={focused && !confirm && !renamingTrack && !songFiltering}
-            reserveRows={confirm || renamingTrack || showSongSearchRow ? 1 : 0}
+            // The row above plus its expanded-mode margin (Library's formula).
+            reserveRows={
+              confirm || renamingTrack || showSongSearchRow
+                ? compact
+                  ? 1
+                  : 2
+                : 0
+            }
             onDelete={(value) => {
               const t = library.get(value);
               if (t) setConfirm({ kind: "song", id: t.id, label: t.title });
@@ -510,7 +528,7 @@ export function Playlists() {
               ) : (
                 <Box flexGrow={1} minWidth={0}>
                   <Text dimColor wrap="truncate-end">
-                    {q || "Press / to search your playlists"}
+                    {q || "Press / to search…"}
                   </Text>
                 </Box>
               )}

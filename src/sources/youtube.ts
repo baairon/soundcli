@@ -71,13 +71,14 @@ export function makeYoutube(input?: string): SourceAdapter {
         playlist.id === "single" ? col.title || playlist.title : playlist.title;
       return col.entries
         .filter((e) => e.id)
-        .map((e) => ({
+        .map((e, i) => ({
           id: e.id,
           title: e.title,
           artist: e.uploader,
           duration: e.duration,
           downloadUrl: youtubeVideoUrl(e.url ?? e.id),
           playlistTitle,
+          position: i + 1,
           owner,
         }));
     },

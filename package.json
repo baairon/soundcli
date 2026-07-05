@@ -1,6 +1,6 @@
 {
   "name": "sndcli",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Own your music. Download your YouTube, SoundCloud, and Spotify libraries to your computer and play them offline, all from your terminal.",
   "type": "module",
   "bin": {

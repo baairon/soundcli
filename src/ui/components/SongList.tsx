@@ -40,15 +40,12 @@ interface SongListProps {
   deleteTargetsPlaying?: boolean;
   /** Show 1-based track numbers before each item (the drill-in playlist look). */
   numbered?: boolean;
-  /** Insert a blank line between the leading action row and the first item. */
-  actionGap?: boolean;
   /** When set, `t` on an item row (never the action row) asks to rename it. */
   onRename?: (value: string) => void;
 }
 
 type Row =
   | { kind: "header"; title: string }
-  | { kind: "spacer" }
   | { kind: "action"; value: string; label: string; idx: number }
   | { kind: "item"; item: SongItem; idx: number; no: number };
 
@@ -100,7 +97,6 @@ export function SongList({
   onDelete,
   deleteTargetsPlaying,
   numbered,
-  actionGap,
   onRename,
 }: SongListProps) {
   const { listRows } = useStore();
@@ -113,7 +109,6 @@ export function SongList({
   if (action) {
     rows.push({ kind: "action", value: action.value, label: action.label, idx });
     idx++;
-    if (actionGap) rows.push({ kind: "spacer" });
   }
   for (const g of groups) {
     if (g.items.length === 0) continue;
@@ -186,13 +181,6 @@ export function SongList({
           return (
             <Box key={`h-${start + i}`}>
               <Text color={COLOR.alt}>{r.title}</Text>
-            </Box>
-          );
-        }
-        if (r.kind === "spacer") {
-          return (
-            <Box key={`sp-${start + i}`}>
-              <Text> </Text>
             </Box>
           );
         }

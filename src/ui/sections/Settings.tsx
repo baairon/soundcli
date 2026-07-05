@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { Box, Text, useInput } from "ink";
 import { Select } from "@inkjs/ui";
-import { useStore, useLibrary } from "../store";
+import { useStore } from "../store";
 import { TextField } from "../components/TextField";
 import { Header } from "../components/Header";
 import { openPath } from "../../util/open-path";
@@ -11,33 +11,18 @@ import { wrapStep } from "../move";
 import { displayPath, truncate } from "../../util/format";
 import { persistableHandle } from "../../sources/persist-handle";
 import { COLOR, ICON } from "../theme";
-import { findDuplicates } from "../../library/drift";
-import { reconcileLibrary, type ReconcileResult } from "../../library/reconcile";
 
 type Mode =
   | "menu"
   | "youtube"
   | "soundcloud"
   | "spotify"
-  | "duplicate-doctor"
   | "wipe-all";
 
 export function Settings() {
   const { config, setConfig, library, queue, region, setCaptureMode } =
     useStore();
   const focused = region === "content";
-  const libVersion = useLibrary(library);
-  const duplicateGroups = useMemo(
-    () => findDuplicates(library.all().filter((t) => t.source !== "local")),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [library, libVersion],
-  );
-  const duplicateTracks = duplicateGroups.reduce(
-    (sum, g) => sum + Math.max(0, g.tracks.length - 1),
-    0,
-  );
-  const [doctorResult, setDoctorResult] = useState<ReconcileResult | null>(null);
-  const [doctorRunning, setDoctorRunning] = useState(false);
   const [mode, setMode] = useState<Mode>("menu");
   const [cursor, setCursor] = useState(0);
 
@@ -74,15 +59,6 @@ export function Settings() {
       value: "open-folder",
       name: "Music folder",
       detail: displayPath(config.libraryDir),
-    },
-    {
-      value: "duplicate-doctor",
-      name: "Duplicate doctor",
-      detail:
-        duplicateTracks > 0
-          ? `${duplicateTracks} duplicate ${duplicateTracks === 1 ? "track" : "tracks"}`
-          : "library looks clean",
-      set: duplicateTracks === 0,
     },
     {
       value: "wipe-all",
@@ -133,21 +109,6 @@ export function Settings() {
       if (key.escape) setMode("menu");
     },
     { isActive: inSubPage },
-  );
-
-  function runDuplicateDoctor(): void {
-    if (doctorRunning) return;
-    setDoctorRunning(true);
-    void reconcileLibrary(library, new Map<string, boolean>(), config.libraryDir)
-      .then(setDoctorResult)
-      .finally(() => setDoctorRunning(false));
-  }
-
-  useInput(
-    (_input, key) => {
-      if (key.return) runDuplicateDoctor();
-    },
-    { isActive: focused && mode === "duplicate-doctor" },
   );
 
   // Every settings sub-page is rendered through frame(), so the back hint lives
@@ -231,51 +192,6 @@ export function Settings() {
       "spotifyHandle",
       "Your Spotify handle",
       config.spotifyHandle,
-    );
-  }
-
-  if (mode === "duplicate-doctor") {
-    const preview = duplicateGroups.slice(0, 5);
-    const fixed = doctorResult
-      ? doctorResult.mergedDuplicates + doctorResult.deletedFiles + doctorResult.prunedMissing + doctorResult.relinked + doctorResult.adopted + doctorResult.healedOwners
-      : 0;
-    return frame(
-      "Duplicate doctor",
-      <Box flexDirection="column">
-        <Text dimColor wrap="truncate-end">
-          {duplicateTracks > 0
-            ? `${duplicateGroups.length} duplicate groups, ${duplicateTracks} extra tracks found.`
-            : "No duplicate downloaded tracks found."}
-        </Text>
-        {preview.map((g) => {
-          const first = g.tracks[0]!;
-          return (
-            <Text key={g.signature} dimColor wrap="truncate-end">
-              {`${ICON.dot} ${first.artist ? `${first.artist} - ` : ""}${first.title}  ${ICON.dot}  ${g.tracks.length} copies`}
-            </Text>
-          );
-        })}
-        {duplicateGroups.length > preview.length ? (
-          <Text dimColor>{`${ICON.dot} +${duplicateGroups.length - preview.length} more groups`}</Text>
-        ) : null}
-        <Box marginTop={1} flexDirection="column">
-          <Text dimColor>{`${ICON.dot} ↵ runs the same safe library cleanup used at startup`}</Text>
-          <Text dimColor>{`${ICON.dot} it removes duplicate index entries and redundant downloaded files`}</Text>
-        </Box>
-        {doctorResult ? (
-          <Box marginTop={1}>
-            <Text color={fixed > 0 ? COLOR.good : undefined} dimColor={fixed === 0}>
-              {`Fixed: ${doctorResult.mergedDuplicates} duplicate entries, ${doctorResult.deletedFiles} files, ${doctorResult.prunedMissing} missing, ${doctorResult.relinked} relinked, ${doctorResult.adopted} adopted`}
-            </Text>
-          </Box>
-        ) : null}
-        <Box marginTop={1}>
-          <Text>
-            <Text color={COLOR.alt}>↵</Text>
-            <Text dimColor>{doctorRunning ? " Running…" : " Run cleanup"}</Text>
-          </Text>
-        </Box>
-      </Box>,
     );
   }
 

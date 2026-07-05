@@ -1,18 +1,20 @@
 import { EventEmitter } from "node:events";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import type { Config } from "../config/config";
 import { downloadLogFile } from "../config/paths";
 import type { Library } from "../library/library";
 import { libId, type SourceId, type Track } from "../library/types";
 import type { SourceTrack } from "../sources/types";
-import { trackSignature } from "../library/drift";
+import { playlistFromPath, trackSignature } from "../library/drift";
 import { findDownloadedFile } from "../util/recover-path";
 import {
   downloadTrack,
+  enumerate,
   type DownloadParams,
   type DownloadResult,
 } from "../ytdlp/ytdlp";
+import { renameTrack } from "../library/rename";
 import type { DownloadProgress } from "../ytdlp/progress";
 import { resolveSpotifyDownloadUrl } from "../sources/spotify/resolve";
 import { sanitizeName } from "../ytdlp/args";
@@ -85,6 +87,24 @@ let counter = 0;
 
 /** Fixed number of simultaneous downloads (not user-configurable). */
 const DEFAULT_CONCURRENCY = 3;
+
+/**
+ * A title that is missing or just a platform track id (a bare api-v2 stub that
+ * never got real metadata). These render as "900000006" or blank in every
+ * list, so indexing avoids them and a redownload attempt is allowed through as
+ * a chance to heal the name.
+ */
+function needsTitleHeal(title: string): boolean {
+  const t = title.trim();
+  return !t || /^\d+$/.test(t);
+}
+
+/** First candidate that is a usable display title (present and not a bare id). */
+function healthyTitle(
+  ...candidates: Array<string | undefined>
+): string | undefined {
+  return candidates.find((t) => t !== undefined && !needsTitleHeal(t));
+}
 
 /**
  * Pause the whole queue after this many hard failures in a row. A cluster of
@@ -461,19 +481,92 @@ export class DownloadQueue extends EventEmitter {
       : undefined;
     const folder = this.playlistFolder(item);
     if (!existing || !folder) return false;
-    if (this.isInRequestedFolder(existing, item)) return true;
+    if (this.isInRequestedFolder(existing, item)) {
+      // Queued despite already living here (e.g. a title heal): still refresh
+      // its feed position so the set keeps mirroring the platform's order.
+      if (
+        item.track.position !== undefined &&
+        existing.playlistPos !== item.track.position
+      ) {
+        await this.library.upsert({
+          ...existing,
+          playlistPos: item.track.position,
+        });
+      }
+      return true;
+    }
 
     const source = existing.filePath;
     const target = join(folder, basename(source));
     try {
       await fs.mkdir(folder, { recursive: true });
       await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
-      return true;
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
-      if (err.code === "EEXIST") return true;
       if (err.code === "ENOENT") return false;
-      throw e;
+      if (err.code !== "EEXIST") throw e;
+    }
+    // Index the copy right away, under the same path-derived id reconcile's
+    // adoption would mint, so the set shows complete without waiting for a
+    // rescan (which then upserts the same entry, a no-op). It stays a "local"
+    // entry: the real (source, owner) id already names the original file, and
+    // local tracks are exempt from dedupe, so the copy never gets cleaned up.
+    const rel = relative(this.config.libraryDir, target);
+    const stat = await fs.stat(target).catch(() => undefined);
+    await this.library.upsert({
+      id: libId("local", rel),
+      source: "local",
+      sourceTrackId: rel,
+      // The copy is the same audio as the original entry, so it inherits that
+      // entry's real metadata; feed stubs (slug/api-v2 names) only fill gaps.
+      title: healthyTitle(existing.title, item.track.title) ?? existing.title,
+      artist: existing.artist ?? item.track.artist,
+      album: existing.album,
+      durationSec: existing.durationSec,
+      webpageUrl: existing.webpageUrl,
+      filePath: target,
+      fileSize: stat?.size,
+      playlist: playlistFromPath(target, this.config.libraryDir, item.track.owner),
+      playlistPos: item.track.position,
+      owner: item.track.owner,
+      addedAt: new Date().toISOString(),
+    });
+    return true;
+  }
+
+  /**
+   * A saved track stuck with a missing or bare id title (an api-v2 stub that
+   * never got real metadata) heals when the user re-attempts its download:
+   * resolve the real name (from the incoming track, or one metadata probe) and
+   * retitle the entry + file via renameTrack. Best effort and silent, like
+   * reconcile: a failed probe changes nothing and never fails the item.
+   */
+  private async healMissingTitle(item: QueueItem): Promise<void> {
+    try {
+      const existing = this.library.get(
+        libId(item.source, item.track.id, item.track.owner),
+      );
+      if (!existing || !needsTitleHeal(existing.title)) return;
+      let title = item.track.title;
+      let artist = item.track.artist;
+      if (needsTitleHeal(title) && item.track.downloadUrl) {
+        const probed = await enumerate(item.track.downloadUrl, { flat: false });
+        const e = probed.entries[0];
+        if (!e) return;
+        title = e.title;
+        artist = artist ?? e.uploader;
+      }
+      if (needsTitleHeal(title)) return;
+      await renameTrack(
+        this.library,
+        { ...existing, artist: existing.artist ?? artist },
+        title,
+      );
+      // Carry the healed name onto the item so a materialize copy that
+      // follows indexes it too (and the queue row reads human).
+      item.track = { ...item.track, title, artist: item.track.artist ?? artist };
+    } catch {
+      // offline or unresolvable: keep the id title, heal on a later attempt
     }
   }
 
@@ -610,6 +703,9 @@ export class DownloadQueue extends EventEmitter {
     let skipped = 0;
     let alreadySaved = 0;
     let newTracks = 0;
+    // Feed positions to restamp onto already-saved tracks: "download all"
+    // re-lists every playlist, so each pass self-heals stored order for free.
+    const heals: Track[] = [];
     for (const inp of inputs) {
       const id = libId(inp.source, inp.track.id, inp.track.owner);
       const sig = trackSignature({ ...inp.track, source: inp.source });
@@ -618,13 +714,27 @@ export class DownloadQueue extends EventEmitter {
       if (
         existing &&
         !blocked.has(id) &&
-        !this.isInRequestedFolder(existing, inp)
+        (!this.isInRequestedFolder(existing, inp) ||
+          needsTitleHeal(existing.title))
       ) {
-        // Already downloaded elsewhere, but this playlist folder is incomplete:
-        // queue a local copy operation rather than hiding the track as a skip.
+        // Already downloaded elsewhere, but this playlist folder is incomplete
+        // (queue a local copy operation rather than hiding the track as a
+        // skip), or saved under a bare id title (let run() heal the name).
         alreadySaved++;
       } else if (inLibrary || blocked.has(id) || signatures.has(sig)) {
         if (inLibrary || ownedSignatures.has(sig)) alreadySaved++;
+        if (
+          existing &&
+          inp.track.playlistTitle &&
+          inp.track.position !== undefined &&
+          existing.playlistPos !== inp.track.position &&
+          this.isInRequestedFolder(existing, inp)
+        ) {
+          // Lives in this folder under a stale (or missing) feed position. A
+          // track saved in another folder keeps that playlist's position; its
+          // copy here gets stamped by materialize instead.
+          heals.push({ ...existing, playlistPos: inp.track.position });
+        }
         skipped++;
         continue;
       } else {
@@ -641,6 +751,11 @@ export class DownloadQueue extends EventEmitter {
         percent: 0,
       });
       added++;
+    }
+
+    if (heals.length > 0) {
+      // One notify + one atomic index write for the whole listing.
+      void this.library.upsertMany(heals).catch(() => {});
     }
 
     this.batchInputTotal += inputs.length;
@@ -752,6 +867,7 @@ export class DownloadQueue extends EventEmitter {
       item.status = "downloading";
       this.emit("update");
       try {
+        await this.healMissingTitle(item);
         item.status = (await this.materializeExisting(item)) ? "done" : "skipped";
         item.percent = 100;
       } catch (e) {
@@ -890,6 +1006,7 @@ export class DownloadQueue extends EventEmitter {
                 filePath: m.filepath,
                 webpageUrl: m.webpage_url,
                 playlist: item.track.playlistTitle,
+                playlistPos: item.track.position,
                 owner: item.track.owner,
                 addedAt,
                 spotifyId: item.track.id,
@@ -898,13 +1015,21 @@ export class DownloadQueue extends EventEmitter {
                 id: libId(item.source, m.id, item.track.owner),
                 source: item.source,
                 sourceTrackId: m.id,
-                title: m.track ?? m.title,
-                artist: m.artist ?? m.uploader,
+                // Meta can echo a bare track id (or nothing) for api-v2
+                // stubs; never index that when the enqueued entry knows the
+                // real name. Last resort stays as-is so a finished download
+                // is never dropped over naming.
+                title:
+                  healthyTitle(m.track, m.title, item.track.title) ??
+                  m.track ??
+                  m.title,
+                artist: m.artist ?? m.uploader ?? item.track.artist,
                 album: m.album,
                 durationSec: m.duration,
                 filePath: m.filepath,
                 webpageUrl: m.webpage_url,
                 playlist: m.playlist_title ?? item.track.playlistTitle,
+                playlistPos: item.track.position,
                 owner: item.track.owner,
                 addedAt,
               };

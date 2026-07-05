@@ -5,6 +5,7 @@ import { Box } from "ink";
 import { StoreContext, type Store } from "../src/ui/store";
 import { defaultConfig } from "../src/config/config";
 import { Library } from "../src/library/library";
+import type { Track } from "../src/library/types";
 import { DownloadQueue, type QueueItem } from "../src/download/queue";
 import { FakeQueue, asQueue, makeFakeLibrary } from "../scripts/fake-data";
 import { Playback } from "../src/player/playback";
@@ -79,7 +80,7 @@ describe("single-page sections render", () => {
     const full = render(
       wrap(<LibrarySection />, makeStore({ library: makeFakeLibrary() })),
     );
-    expect(full.lastFrame() ?? "").toContain("Press / to search");
+    expect(full.lastFrame() ?? "").toContain("Press / to search…");
 
     const tight = render(
       wrap(
@@ -87,7 +88,7 @@ describe("single-page sections render", () => {
         makeStore({ library: makeFakeLibrary(), compact: true }),
       ),
     );
-    expect(tight.lastFrame() ?? "").not.toContain("Press / to search");
+    expect(tight.lastFrame() ?? "").not.toContain("Press / to search…");
   });
 
   it("download shows the source picker when nothing is queued", () => {
@@ -103,13 +104,6 @@ describe("single-page sections render", () => {
     const { lastFrame } = render(wrap(<Settings />, store));
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Music folder");
-  });
-
-  it("settings exposes the duplicate doctor", () => {
-    const store = makeStore();
-    const { lastFrame } = render(wrap(<Settings />, store));
-    const frame = lastFrame() ?? "";
-    expect(frame).toContain("Duplicate doctor");
   });
 
   it("settings shows values inline after the label column", () => {
@@ -482,7 +476,7 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     expect(frame).toContain("SoundCloud");
     const lines = frame.split("\n");
     const allLine = lines.findIndex((l) => l.includes("All") && l.includes("YouTube"));
-    const filterLine = lines.findIndex((l) => l.includes("Press / to search"));
+    const filterLine = lines.findIndex((l) => l.includes("Press / to search…"));
     expect(allLine).toBeGreaterThanOrEqual(0);
     expect(filterLine).toBeGreaterThan(allLine);
   });
@@ -498,7 +492,8 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     await tick();
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Song Title");
-    expect(frame).not.toContain("Press / to search");
+    // Expanded drill-down keeps the idle search hint, same as Library.
+    expect(frame).toContain("Press / to search…");
     expect(frame).toContain("Shuffle");
   });
 
@@ -516,6 +511,41 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     expect(frame).toMatch(/\d+\s*min/);
     // …and the first track is numbered.
     expect(frame).toMatch(/1\s+Song Title/);
+  });
+
+  it("playlists drill-down follows the source feed order, strays last", async () => {
+    const mk = (n: number, title: string, playlistPos?: number): Track => ({
+      id: `youtube:yourhandle:o${n}`,
+      source: "youtube",
+      sourceTrackId: `o${n}`,
+      title,
+      artist: "Artist Name",
+      durationSec: 100,
+      filePath: `/music/soundcli/youtube/yourhandle/order-${n}.mp3`,
+      playlist: "ordered set",
+      playlistPos,
+      owner: "yourhandle",
+      addedAt: new Date(Date.UTC(2026, 0, 30 - n)).toISOString(),
+    });
+    // Array order = addedAt newest-first, i.e. scrambled completion order.
+    const store = makeStore({
+      region: "content",
+      library: makeFakeLibrary([
+        mk(1, "Downloaded Last", 3),
+        mk(2, "Downloaded Mid", 1),
+        mk(3, "Downloaded First", 2),
+        mk(4, "Adopted Stray"), // no feed position: stays at the end
+      ]),
+    });
+    const { stdin, lastFrame } = render(wrap(<Playlists />, store));
+    await tick();
+    stdin.write("\r");
+    await tick();
+    const frame = lastFrame() ?? "";
+    expect(frame).toMatch(/1\s+Downloaded Mid/);
+    expect(frame).toMatch(/2\s+Downloaded First/);
+    expect(frame).toMatch(/3\s+Downloaded Last/);
+    expect(frame).toMatch(/4\s+Adopted Stray/);
   });
 
   it("playlists sets view leaves captureMode none so esc reaches the sidebar", async () => {
@@ -549,7 +579,7 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     expect(frame).toContain("All");
     expect(frame).toContain("YouTube");
     expect(frame).toContain("SoundCloud");
-    expect(frame).toContain("Press / to search");
+    expect(frame).toContain("Press / to search…");
     expect(frame).toContain("Song Title");
   });
 
@@ -572,7 +602,7 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     stdin.write("/");
     await tick();
     expect(sections).not.toContain("library");
-    expect(lastFrame() ?? "").not.toContain("Press / to search");
+    expect(lastFrame() ?? "").not.toContain("Press / to search…");
   });
 
   it("download consumes a pasted playlist link", async () => {
@@ -625,13 +655,13 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     stdin.write("t");
     await tick();
     // The rename field (prefilled with the title) replaces the search hint.
-    expect(lastFrame() ?? "").not.toContain("Press / to search your library");
+    expect(lastFrame() ?? "").not.toContain("Press / to search…");
     // The list is unfocused while the field is open: enter submits the rename
     // (unchanged title = noop) instead of also playing the cursor row.
     stdin.write("\r");
     await tick();
     expect(played).toEqual([]);
-    expect(lastFrame() ?? "").toContain("Press / to search your library");
+    expect(lastFrame() ?? "").toContain("Press / to search…");
   });
 
   it("playlists: t opens the set rename prefilled with its name", async () => {
@@ -645,10 +675,10 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     stdin.write("t");
     await tick();
     // The rename field replaces the search hint row, prefilled with the name.
-    expect(lastFrame() ?? "").not.toContain("Press / to search your playlists");
+    expect(lastFrame() ?? "").not.toContain("Press / to search…");
     // esc cancels without renaming.
     stdin.write(ESC);
     await escTick();
-    expect(lastFrame() ?? "").toContain("Press / to search your playlists");
+    expect(lastFrame() ?? "").toContain("Press / to search…");
   });
 });

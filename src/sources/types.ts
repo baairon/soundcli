@@ -22,6 +22,8 @@ export interface SourceTrack {
   /** URL yt-dlp downloads to get the audio. */
   downloadUrl: string;
   playlistTitle?: string;
+  /** 1-based index within the fetched collection listing (the feed's order). */
+  position?: number;
   /**
    * Normalized lowercase handle whose collection this track came from, so
    * likes/sets from different handles never merge (folders, dedupe, library

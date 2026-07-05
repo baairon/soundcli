@@ -28,6 +28,7 @@ import {
 } from "../../util/format";
 import { fuzzyFilter } from "../../util/fuzzy";
 import { WAITING_FOR_TOOLS, type QueueItem } from "../../download/queue";
+import { sanitizeName } from "../../ytdlp/args";
 import type { SourceAdapter, SourcePlaylist } from "../../sources/types";
 import { SOURCE_LABELS, type SourceId } from "../../library/types";
 
@@ -583,12 +584,16 @@ export function PlaylistPicker({
 
   // Count how many songs we already own per playlist name so we can show
   // "N saved" next to each set. Uses library data only, no extra network calls.
+  // Local entries under this owner count too (playlist copies materialize as
+  // "local"), and both sides go through sanitizeName: stored playlist names
+  // mix raw feed titles with folder-derived (sanitized) ones, so a title with
+  // special characters would otherwise never match its own folder.
   const ownedByPlaylist = useMemo(() => {
     const counts = new Map<string, number>();
     for (const t of library.all()) {
-      if (t.source !== sourceId) continue;
+      if (t.source !== sourceId && t.source !== "local") continue;
       if ((t.owner ?? "") !== (owner ?? "")) continue;
-      const name = t.playlist ?? "";
+      const name = sanitizeName(t.playlist ?? "");
       counts.set(name, (counts.get(name) ?? 0) + 1);
     }
     return counts;
@@ -716,7 +721,7 @@ export function PlaylistPicker({
         ) : (
           <Box flexGrow={1} minWidth={0}>
             <Text dimColor wrap="truncate-end">
-              {q || "Press / to search playlists"}
+              {q || "Press / to search…"}
             </Text>
           </Box>
         )}
@@ -747,7 +752,7 @@ export function PlaylistPicker({
         const on = selected.has(r.item.id);
         const here = r.idx === cursor && focused;
         const label = cleanText(r.item.title);
-        const owned = ownedByPlaylist.get(r.item.title) ?? 0;
+        const owned = ownedByPlaylist.get(sanitizeName(r.item.title)) ?? 0;
         const total = r.item.count;
         const allSaved = total !== undefined && total > 0 && owned >= total;
 
@@ -766,8 +771,11 @@ export function PlaylistPicker({
         return (
           <Box key={r.item.id}>
             <Text color={COLOR.accent}>{here ? `${ICON.pointer} ` : "  "}</Text>
+            {/* Picked rows earn the checkmark; unpicked rows keep a blank
+                2-char gutter (a dot on every row read as noise, and the
+                status line already teaches space). */}
             <Text color={on ? COLOR.good : undefined} dimColor={!on}>
-              {on ? `${ICON.done} ` : `${ICON.dot} `}
+              {on ? `${ICON.done} ` : "  "}
             </Text>
             <Box flexGrow={1} minWidth={0}>
               <Text

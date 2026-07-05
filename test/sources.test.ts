@@ -130,6 +130,8 @@ describe("soundcloud tombstone filtering", () => {
     expect(tracks.map((t) => t.id)).toEqual(["1", "2"]);
     // The numeric-titled real track got its name back from the URL slug.
     expect(tracks[1]!.title.toLowerCase()).toContain("numeric");
+    // Feed positions stay contiguous over the kept entries.
+    expect(tracks.map((t) => t.position)).toEqual([1, 2]);
   });
 
   it("drops tombstones from a pasted likes feed", async () => {
@@ -170,6 +172,8 @@ describe("soundcloud tombstone filtering", () => {
       "900000002",
       "900000003",
     ]);
+    // The set's feed order rides along as 1-based positions.
+    expect(tracks.map((t) => t.position)).toEqual([1, 2, 3]);
   });
 });
 

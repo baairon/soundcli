@@ -42,6 +42,11 @@ export interface Track {
   /** Playlist this track was downloaded under, if any. */
   playlist?: string;
   /**
+   * 1-based position in that playlist's source feed. Restamped on every
+   * "download all" pass, so the drill-in mirrors the platform's own order.
+   */
+  playlistPos?: number;
+  /**
    * Normalized lowercase handle whose collection this came from (unset for
    * Spotify and for pre-owner downloads awaiting migration).
    */

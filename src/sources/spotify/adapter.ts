@@ -16,7 +16,11 @@ export function spotifySearchQuery(t: { artist: string; title: string }): string
   return `ytsearch1:${query}`;
 }
 
-function toSourceTrack(t: SpotifyPublicTrack, playlistTitle: string): SourceTrack {
+function toSourceTrack(
+  t: SpotifyPublicTrack,
+  playlistTitle: string,
+  position?: number,
+): SourceTrack {
   return {
     id: t.id,
     title: t.title,
@@ -24,6 +28,7 @@ function toSourceTrack(t: SpotifyPublicTrack, playlistTitle: string): SourceTrac
     duration: t.durationMs ? Math.round(t.durationMs / 1000) : undefined,
     downloadUrl: spotifySearchQuery({ artist: t.artist, title: t.title }),
     playlistTitle,
+    position,
   };
 }
 
@@ -134,7 +139,7 @@ export function makeSpotify(input?: string): SourceAdapter {
         entityType === "playlist"
           ? await readFullPlaylist(id)
           : await readPublicEntity(entityType, id);
-      return entity.tracks.map((t) => toSourceTrack(t, entity.name));
+      return entity.tracks.map((t, i) => toSourceTrack(t, entity.name, i + 1));
     },
   };
 }

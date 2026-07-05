@@ -17,6 +17,13 @@ function isSetUrl(url: string): boolean {
 }
 
 /**
+ * Our label for the likes feed. Also the scope marker for tombstone filtering:
+ * bare api-v2 URLs only mean "deleted" inside this feed (see listTracks and
+ * persist's restore filter).
+ */
+export const SOUNDCLOUD_LIKED_TITLE = "Liked Songs";
+
+/**
  * A deleted track lingering in a likes feed: the flat entry points at the raw
  * api-v2 /tracks/<id> endpoint and carries no human metadata (no title, or a
  * bare numeric id). These 404 forever, even on a current yt-dlp, so they
@@ -134,7 +141,7 @@ export function makeSoundcloud(input?: string): SourceAdapter {
       // Insert Liked Songs at the front (after counting).
       lists.unshift({
         id: `sc-liked-${user}`,
-        title: "Liked Songs",
+        title: SOUNDCLOUD_LIKED_TITLE,
         url: likesUrl,
         kind: "liked",
         count: likedSongCount,
@@ -192,12 +199,13 @@ export function makeSoundcloud(input?: string): SourceAdapter {
         }
       }
 
+      // A pasted set link starts with a slug-guessed title; once fetched, the
       // feed's real set name is better. (Never for "liked" — that's our label.)
       const playlistTitle =
         playlist.id === "single" ? col.title || playlist.title : playlist.title;
       // The likes feed's flat entries often carry no title (or a bare numeric
       // ID); the track URL's slug holds the real name, so prefer it then.
-      return entries.map((e) => ({
+      return entries.map((e, i) => ({
         id: e.id,
         title:
           e.title && !/^\d+$/.test(e.title)
@@ -207,6 +215,9 @@ export function makeSoundcloud(input?: string): SourceAdapter {
         duration: e.duration,
         downloadUrl: e.url as string,
         playlistTitle,
+        // Position over the kept entries (tombstones/sets already filtered),
+        // so stored order stays contiguous and matches what actually lands.
+        position: i + 1,
         owner,
       }));
     },

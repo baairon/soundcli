@@ -12,6 +12,7 @@ beforeAll(() => {
 // "downloading" so we can assert enqueue's dedupe accounting.
 vi.mock("../src/ytdlp/ytdlp", () => ({
   downloadTrack: vi.fn(() => new Promise(() => {})),
+  enumerate: vi.fn(async () => ({ entries: [] })),
 }));
 
 // Control Spotify lazy URL resolution so we can assert the resolved URL is
@@ -30,7 +31,7 @@ vi.mock("../src/util/recover-path", async (importOriginal) => {
   };
 });
 
-import { downloadTrack } from "../src/ytdlp/ytdlp";
+import { downloadTrack, enumerate } from "../src/ytdlp/ytdlp";
 import {
   DownloadQueue,
   isPermanentTrackError,
@@ -142,30 +143,34 @@ describe("download queue dedupe", () => {
       sourceTrackId: "sc1",
       title: "Song",
       artist: "Artist",
+      durationSec: 99,
       filePath: src,
       playlist: "Liked Songs",
       owner: "owner1",
       addedAt: new Date().toISOString(),
     };
+    const upsert = vi.fn(async () => {});
     const lib = {
       has: (id: string) => id === existing.id,
       get: (id: string) => (id === existing.id ? existing : undefined),
       all: () => [existing],
-      upsert: vi.fn(async () => {}),
+      upsert,
     } as unknown as Library;
     const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
     vi.mocked(downloadTrack).mockClear();
+    // The set feed offers only a bare-id stub for this track: the copy's
+    // metadata must come from the existing entry, never the stub.
     const r = q.enqueue([
       {
         source: "soundcloud",
         sourceLabel: "SoundCloud",
         track: {
           id: "sc1",
-          title: "Song",
-          artist: "Artist",
-          downloadUrl: "https://soundcloud.com/a/song",
+          title: "900000005",
+          downloadUrl: "https://api-v2.soundcloud.com/tracks/900000005",
           owner: "owner1",
           playlistTitle: "Set A",
+          position: 4,
         },
       },
     ]);
@@ -181,9 +186,278 @@ describe("download queue dedupe", () => {
     const copied = path.join(root, "SoundCloud", "owner1", "Set A", "Artist - Song.m4a");
     await expect(fs.readFile(copied, "utf8")).resolves.toBe("audio");
     expect(vi.mocked(downloadTrack)).not.toHaveBeenCalled();
+    // The copy is indexed immediately as the "local" entry reconcile's
+    // adoption would mint, but with the track's real metadata.
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: `local:${path.relative(root, copied)}`,
+        source: "local",
+        title: "Song",
+        artist: "Artist",
+        durationSec: 99,
+        filePath: copied,
+        playlist: "Set A",
+        playlistPos: 4,
+        owner: "owner1",
+      }),
+    );
+    // The original keeps its own playlist's position: only the copy is stamped.
+    expect(upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: existing.id }),
+    );
     expect(q.getItems().length).toBe(0);
     expect(q.stats().done).toBe(1);
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("heals a bare id title on a redownload attempt", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-q-"));
+    const setDir = path.join(root, "SoundCloud", "owner1", "Set A");
+    const src = path.join(setDir, "900000006.m4a");
+    await fs.mkdir(setDir, { recursive: true });
+    await fs.writeFile(src, "audio");
+
+    const existing = {
+      id: "soundcloud:owner1:900000006",
+      source: "soundcloud" as SourceId,
+      sourceTrackId: "900000006",
+      title: "900000006",
+      filePath: src,
+      playlist: "Set A",
+      owner: "owner1",
+      addedAt: new Date().toISOString(),
+    };
+    const upsert = vi.fn(async () => {});
+    const lib = {
+      has: (id: string) => id === existing.id,
+      get: (id: string) => (id === existing.id ? existing : undefined),
+      all: () => [existing],
+      upsert,
+      upsertMany: vi.fn(async () => {}),
+    } as unknown as Library;
+    vi.mocked(enumerate).mockResolvedValue({
+      entries: [
+        {
+          id: "900000006",
+          title: "healed demo song",
+          url: "https://soundcloud.com/demoartist/demo-track-one",
+          uploader: "demo artist name",
+        },
+      ],
+    });
+    const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
+    vi.mocked(downloadTrack).mockClear();
+    const r = q.enqueue([
+      {
+        source: "soundcloud",
+        sourceLabel: "SoundCloud",
+        track: {
+          id: "900000006",
+          title: "900000006",
+          downloadUrl: "https://api-v2.soundcloud.com/tracks/900000006",
+          owner: "owner1",
+          playlistTitle: "Set A",
+        },
+      },
+    ]);
+    expect(r.added).toBe(1);
+    await new Promise((res) => setTimeout(res, 60));
+
+    // File and entry both carry the real name, in the layout's stem shape.
+    const healed = path.join(setDir, "demo artist name - healed demo song.m4a");
+    await expect(fs.readFile(healed, "utf8")).resolves.toBe("audio");
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: existing.id,
+        title: "healed demo song",
+        artist: "demo artist name",
+        filePath: healed,
+      }),
+    );
+    expect(vi.mocked(downloadTrack)).not.toHaveBeenCalled();
+    expect(q.stats().done).toBe(1);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("heals an empty title from the enqueued track without probing", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-q-"));
+    const setDir = path.join(root, "SoundCloud", "owner1", "Set A");
+    const src = path.join(setDir, "900000007.m4a");
+    await fs.mkdir(setDir, { recursive: true });
+    await fs.writeFile(src, "audio");
+
+    const existing = {
+      id: "soundcloud:owner1:900000007",
+      source: "soundcloud" as SourceId,
+      sourceTrackId: "900000007",
+      title: "",
+      filePath: src,
+      playlist: "Set A",
+      owner: "owner1",
+      addedAt: new Date().toISOString(),
+    };
+    const upsert = vi.fn(async () => {});
+    const lib = {
+      has: (id: string) => id === existing.id,
+      get: (id: string) => (id === existing.id ? existing : undefined),
+      all: () => [existing],
+      upsert,
+      upsertMany: vi.fn(async () => {}),
+    } as unknown as Library;
+    vi.mocked(enumerate).mockClear();
+    const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
+    q.enqueue([
+      {
+        source: "soundcloud",
+        sourceLabel: "SoundCloud",
+        track: {
+          id: "900000007",
+          title: "demo track two",
+          artist: "demo artist name",
+          downloadUrl: "https://soundcloud.com/demoartist/demo-track-two",
+          owner: "owner1",
+          playlistTitle: "Set A",
+        },
+      },
+    ]);
+    await new Promise((res) => setTimeout(res, 60));
+
+    // The enqueued entry already knew the real name: no metadata probe.
+    expect(vi.mocked(enumerate)).not.toHaveBeenCalled();
+    const healed = path.join(setDir, "demo artist name - demo track two.m4a");
+    await expect(fs.readFile(healed, "utf8")).resolves.toBe("audio");
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: existing.id,
+        title: "demo track two",
+        artist: "demo artist name",
+        filePath: healed,
+      }),
+    );
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("still skips owned in-folder tracks with real titles at enqueue", () => {
+    const root = path.join(os.tmpdir(), "soundcli-fake-root");
+    const existing = {
+      id: "soundcloud:owner1:sc9",
+      source: "soundcloud" as SourceId,
+      sourceTrackId: "sc9",
+      title: "Song",
+      artist: "Artist",
+      filePath: path.join(root, "SoundCloud", "owner1", "Set A", "Artist - Song.m4a"),
+      playlist: "Set A",
+      owner: "owner1",
+      addedAt: new Date().toISOString(),
+    };
+    const lib = {
+      has: (id: string) => id === existing.id,
+      get: (id: string) => (id === existing.id ? existing : undefined),
+      all: () => [existing],
+    } as unknown as Library;
+    const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
+    const r = q.enqueue([
+      {
+        source: "soundcloud",
+        sourceLabel: "SoundCloud",
+        track: {
+          id: "sc9",
+          title: "Song",
+          artist: "Artist",
+          downloadUrl: "https://soundcloud.com/a/song",
+          owner: "owner1",
+          playlistTitle: "Set A",
+        },
+      },
+    ]);
+    expect(r.added).toBe(0);
+    expect(r.skipped).toBe(1);
+    expect(r.alreadySaved).toBe(1);
+  });
+
+  it("re-stamps a stale playlist position on an in-folder skip", () => {
+    const root = path.join(os.tmpdir(), "soundcli-fake-root");
+    const existing = {
+      id: "soundcloud:owner1:sc9",
+      source: "soundcloud" as SourceId,
+      sourceTrackId: "sc9",
+      title: "Song",
+      artist: "Artist",
+      filePath: path.join(root, "SoundCloud", "owner1", "Set A", "Artist - Song.m4a"),
+      playlist: "Set A",
+      playlistPos: 7,
+      owner: "owner1",
+      addedAt: new Date().toISOString(),
+    };
+    const upsertMany = vi.fn(async () => {});
+    const lib = {
+      has: (id: string) => id === existing.id,
+      get: (id: string) => (id === existing.id ? existing : undefined),
+      all: () => [existing],
+      upsertMany,
+    } as unknown as Library;
+    const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
+    const r = q.enqueue([
+      {
+        source: "soundcloud",
+        sourceLabel: "SoundCloud",
+        track: {
+          id: "sc9",
+          title: "Song",
+          artist: "Artist",
+          downloadUrl: "https://soundcloud.com/a/song",
+          owner: "owner1",
+          playlistTitle: "Set A",
+          position: 2,
+        },
+      },
+    ]);
+    // Still a pure metadata heal: nothing enters the queue.
+    expect(r.added).toBe(0);
+    expect(r.skipped).toBe(1);
+    expect(upsertMany).toHaveBeenCalledWith([
+      expect.objectContaining({ id: existing.id, playlistPos: 2 }),
+    ]);
+  });
+
+  it("leaves the library alone when the in-folder position already matches", () => {
+    const root = path.join(os.tmpdir(), "soundcli-fake-root");
+    const existing = {
+      id: "soundcloud:owner1:sc9",
+      source: "soundcloud" as SourceId,
+      sourceTrackId: "sc9",
+      title: "Song",
+      artist: "Artist",
+      filePath: path.join(root, "SoundCloud", "owner1", "Set A", "Artist - Song.m4a"),
+      playlist: "Set A",
+      playlistPos: 2,
+      owner: "owner1",
+      addedAt: new Date().toISOString(),
+    };
+    const upsertMany = vi.fn(async () => {});
+    const lib = {
+      has: (id: string) => id === existing.id,
+      get: (id: string) => (id === existing.id ? existing : undefined),
+      all: () => [existing],
+      upsertMany,
+    } as unknown as Library;
+    const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
+    q.enqueue([
+      {
+        source: "soundcloud",
+        sourceLabel: "SoundCloud",
+        track: {
+          id: "sc9",
+          title: "Song",
+          artist: "Artist",
+          downloadUrl: "https://soundcloud.com/a/song",
+          owner: "owner1",
+          playlistTitle: "Set A",
+          position: 2,
+        },
+      },
+    ]);
+    expect(upsertMany).not.toHaveBeenCalled();
   });
 });
 
@@ -285,6 +559,45 @@ describe("download queue per-track retry", () => {
     expect(q.getItems().length).toBe(0);
     expect(q.stats().done).toBe(1);
     expect(calls).toBe(2);
+  });
+
+  it("indexes a fresh download with the enqueued name when meta echoes a bare id", async () => {
+    vi.mocked(downloadTrack).mockResolvedValue({
+      status: "downloaded",
+      meta: { id: "900000006", title: "900000006", filepath: "/x" },
+    });
+    const upsert = vi.fn(async () => {});
+    const lib = {
+      has: () => false,
+      all: () => [],
+      upsert,
+    } as unknown as Library;
+    const q = new DownloadQueue(defaultConfig, lib, 1);
+    q.enqueue([
+      {
+        source: "soundcloud",
+        sourceLabel: "soundcloud",
+        track: {
+          id: "900000006",
+          title: "demo song",
+          artist: "demo artist name",
+          downloadUrl: "x",
+          playlistTitle: "Set A",
+          position: 3,
+        },
+      },
+    ]);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(q.stats().done).toBe(1);
+    // A bare-id/empty meta title never lands in the library when the enqueued
+    // entry knows the real name; the feed position rides into the entry.
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "demo song",
+        artist: "demo artist name",
+        playlistPos: 3,
+      }),
+    );
   });
 
   it("gives up after the bounded retries and marks error", async () => {

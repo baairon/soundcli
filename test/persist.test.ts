@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { snapshotItems, restorableItems } from "../src/download/persist";
+import { SOUNDCLOUD_LIKED_TITLE } from "../src/sources/soundcloud";
 import type { QueueItem, QueueStatus } from "../src/download/queue";
 import type { Library } from "../src/library/library";
 
@@ -46,16 +47,24 @@ describe("restorableItems", () => {
     expect(out.map((p) => p.track.id)).toEqual(["fresh"]);
   });
 
-  it("drops SoundCloud tombstones persisted before the enumeration filter", () => {
+  it("drops liked-feed tombstones but keeps api-v2 tracks from real sets", () => {
     const library = { has: () => false } as unknown as Library;
     const stub = qitem("900000001", "pending");
     stub.source = "soundcloud";
     stub.track.title = "900000001";
     stub.track.downloadUrl = "https://api-v2.soundcloud.com/tracks/900000001";
+    stub.track.playlistTitle = SOUNDCLOUD_LIKED_TITLE;
+    // Same bare api-v2 shape, but inside a real set: yt-dlp resolves these
+    // during download, so a restart must not drop them from the queue.
+    const inSet = qitem("900000002", "pending");
+    inSet.source = "soundcloud";
+    inSet.track.title = "900000002";
+    inSet.track.downloadUrl = "https://api-v2.soundcloud.com/tracks/900000002";
+    inSet.track.playlistTitle = "beach set";
     const real = qitem("fresh", "pending");
     real.source = "soundcloud";
     real.track.downloadUrl = "https://soundcloud.com/artist/fresh";
-    const out = restorableItems(snapshotItems([stub, real]), library);
-    expect(out.map((p) => p.track.id)).toEqual(["fresh"]);
+    const out = restorableItems(snapshotItems([stub, inSet, real]), library);
+    expect(out.map((p) => p.track.id)).toEqual(["900000002", "fresh"]);
   });
 });

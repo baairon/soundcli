@@ -42,6 +42,7 @@ function entryToTrack(
   fallbackUrl: string,
   playlistTitle: string,
   owner?: string,
+  position?: number,
 ): SourceTrack {
   const downloadUrl =
     source === "youtube"
@@ -60,6 +61,7 @@ function entryToTrack(
     duration: e.duration,
     downloadUrl,
     playlistTitle,
+    position,
     owner,
   };
 }
@@ -91,13 +93,15 @@ export async function tracksFromUrl(
   const playlistTitle =
     entries.length > 1 && col.title ? col.title : "Singles";
 
-  return entries.map((e) =>
+  return entries.map((e, i) =>
     entryToTrack(
       e,
       source,
       url,
       playlistTitle,
       source === "link" ? site : ownerFromTrackUrl(source, url),
+      // "Singles" is a synthetic bucket, not a feed, so it carries no order.
+      playlistTitle === "Singles" ? undefined : i + 1,
     ),
   );
 }

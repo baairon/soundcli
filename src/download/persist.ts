@@ -3,7 +3,10 @@ import path from "node:path";
 import { queueFile } from "../config/paths";
 import type { Library } from "../library/library";
 import { libId, type SourceId } from "../library/types";
-import { isSoundcloudTombstone } from "../sources/soundcloud";
+import {
+  isSoundcloudTombstone,
+  SOUNDCLOUD_LIKED_TITLE,
+} from "../sources/soundcloud";
 import type { SourceTrack } from "../sources/types";
 import type { QueueItem } from "./queue";
 
@@ -52,8 +55,11 @@ export function snapshotItems(items: QueueItem[]): PersistedItem[] {
 
 /**
  * Drop anything that already landed in the library (finished before a crash),
- * plus SoundCloud tombstones persisted before the enumeration filter existed
- * (deleted tracks that 404 forever; restoring them re-manufactures failures).
+ * plus SoundCloud liked-feed tombstones persisted before the enumeration
+ * filter existed (deleted tracks that 404 forever; restoring them
+ * re-manufactures failures). Scoped to the likes feed to mirror enumeration:
+ * bare api-v2 URLs inside real sets are kept, since yt-dlp resolves those
+ * during download.
  */
 export function restorableItems(
   persisted: PersistedItem[],
@@ -64,6 +70,7 @@ export function restorableItems(
       !library.has(libId(p.source, p.track.id, p.track.owner)) &&
       !(
         p.source === "soundcloud" &&
+        p.track.playlistTitle === SOUNDCLOUD_LIKED_TITLE &&
         isSoundcloudTombstone({
           url: p.track.downloadUrl,
           title: p.track.title,

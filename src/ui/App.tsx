@@ -209,6 +209,22 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
         }
       });
 
+      // Backfill durations the player discovers: adopted files never carry
+      // one (adoption can't know it without probing audio), so their rows
+      // render no time. mpv reports the real duration on load; teach the
+      // library once per track and the row shows a time forever.
+      let lastHealedId: string | undefined;
+      playback.on("state", (s: PlaybackState) => {
+        const id = s.track?.id;
+        if (!id || s.duration <= 0 || id === lastHealedId) return;
+        const entry = library.get(id);
+        if (!entry || entry.durationSec !== undefined) return;
+        lastHealedId = id;
+        void library
+          .upsert({ ...entry, durationSec: s.duration })
+          .catch(() => {});
+      });
+
       // Auto-install mpv in the background so the rich player "just works".
       // Retried on every launch while it's missing: a one-time flag here once
       // left playback silently broken forever after a single failed attempt.
