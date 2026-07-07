@@ -88,7 +88,12 @@ export function NowPlayingBar() {
     );
   }
 
-  const pct = st.duration > 0 ? (st.position / st.duration) * 100 : 0;
+  // Quantize progress to whole bar cells before it reaches GradientBar: its
+  // React.memo then skips the per-second ticks that land on the same cell.
+  const width = barWidth(cols);
+  const rawPct = st.duration > 0 ? (st.position / st.duration) * 100 : 0;
+  const filled = Math.round((Math.max(0, Math.min(100, rawPct)) / 100) * width);
+  const pct = (filled / width) * 100;
   const clock = `${formatDuration(st.position)} / ${formatDuration(st.duration)}`;
 
   return (
@@ -96,7 +101,7 @@ export function NowPlayingBar() {
       {left}
       <Box marginLeft={2} flexShrink={0}>
         <Text>
-          <GradientBar pct={pct} width={barWidth(cols)} />
+          <GradientBar pct={pct} width={width} />
           <Text dimColor>{`  ${clock}  ${ICON.dot} ${st.volume}%`}</Text>
           {badges.length ? <Text dimColor>{`  ${badges.join(" ")}`}</Text> : null}
         </Text>

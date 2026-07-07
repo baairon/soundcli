@@ -19,12 +19,21 @@ export function useMouseWheel(): void {
       // SGR mouse wheel up:   \x1b[<64;col;rowM
       // SGR mouse wheel down: \x1b[<65;col;rowM
       const re = /\x1b\[<(64|65);\d+;\d+[Mm]/g;
+      let arrows = "";
       let match: RegExpExecArray | null;
       while ((match = re.exec(str)) !== null) {
-        const arrow = match[1] === "64" ? "\x1b[A" : "\x1b[B";
-        // Emit on next tick so Ink's event loop picks it up cleanly.
-        process.nextTick(() => stdin.emit("data", Buffer.from(arrow)));
+        arrows += match[1] === "64" ? "\x1b[A" : "\x1b[B";
       }
+      if (arrows.length === 0) return;
+      // Ink 7 consumes stdin via 'readable' + read() into its own parser, so
+      // a manual emit("data") never reaches it. unshift puts the arrows back
+      // in the stream buffer (the same re-feed mechanism Ink itself uses),
+      // and the read loop that just delivered this chunk drains them in the
+      // same pass, split into one arrow event per notch. One chunk per wheel
+      // burst keeps React folding the cursor updates into a single render.
+      const buf = Buffer.from(arrows);
+      if (typeof stdin.unshift === "function") stdin.unshift(buf);
+      else stdin.emit("data", buf);
     };
 
     // Prepend so we see the raw data before Ink's parser. Ink ignores the

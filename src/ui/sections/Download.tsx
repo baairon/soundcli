@@ -282,6 +282,19 @@ function partialNoticeText(partials: PartialNotice[]): string {
   return more > 0 ? `${lead}  ${ICON.dot}  +${more} more cut short` : lead;
 }
 
+// Live rows sort to the top so at offset 0 the list follows the action;
+// failures sink to the bottom (the header count, f Retry, and the banner
+// carry them) instead of burying the queue under red rows.
+const STATUS_ORDER: Record<QueueItem["status"], number> = {
+  downloading: 0,
+  paused: 1,
+  pending: 2,
+  done: 3,
+  skipped: 3,
+  error: 4,
+  canceled: 5,
+};
+
 function QueueView() {
   const { queue, region, listRows } = useStore();
   const items = useQueueItems(queue);
@@ -289,21 +302,15 @@ function QueueView() {
   const focused = region === "content";
   const [offset, setOffset] = useState(0);
 
-  // Live rows sort to the top so at offset 0 the list follows the action;
-  // failures sink to the bottom (the header count, f Retry, and the banner
-  // carry them) instead of burying the queue under red rows.
-  const STATUS_ORDER: Record<QueueItem["status"], number> = {
-    downloading: 0,
-    paused: 1,
-    pending: 2,
-    done: 3,
-    skipped: 3,
-    error: 4,
-    canceled: 5,
-  };
-
-  const sortedItems = [...items].sort(
-    (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status],
+  // Sorting thousands of rows is the queue's hot path: items' identity only
+  // changes when useQueueItems publishes (at most every 200 ms), so key the
+  // sort on it instead of re-running on every render in between.
+  const sortedItems = useMemo(
+    () =>
+      [...items].sort(
+        (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status],
+      ),
+    [items],
   );
 
   // Exact row budget so the body never overflows (which corrupts Ink's
@@ -352,6 +359,10 @@ function QueueView() {
         setOffset(Math.max(0, start - height));
       } else if (key.pageDown) {
         setOffset(Math.min(maxOffset, start + height));
+      } else if (key.home) {
+        setOffset(0);
+      } else if (key.end) {
+        setOffset(maxOffset);
       }
     },
     { isActive: focused },
@@ -621,6 +632,14 @@ export function PlaylistPicker({
   const rows: Row[] = [{ kind: "action" }];
   ordered.forEach((item, i) => rows.push({ kind: "item", item, idx: i + 1 }));
 
+  // Row budget lives above the key handler so page jumps can move by a
+  // visible screenful, same semantics as SongList (arrows wrap, pages clamp).
+  const showStatus = listRows >= 6;
+  const height = Math.max(
+    1,
+    listRows - (showStatus ? 1 : 0) - 2 - reserveRows,
+  );
+
   useInput(
     (input, key) => {
       if (input === "/") {
@@ -629,6 +648,11 @@ export function PlaylistPicker({
       }
       if (key.upArrow) setCursor((c) => wrapStep(c, -1, selectableCount));
       else if (key.downArrow) setCursor((c) => wrapStep(c, 1, selectableCount));
+      else if (key.pageUp) setCursor((c) => Math.max(0, c - height));
+      else if (key.pageDown)
+        setCursor((c) => Math.min(selectableCount - 1, c + height));
+      else if (key.home) setCursor(0);
+      else if (key.end) setCursor(selectableCount - 1);
       else if (input === " ") {
         if (cursor === 0) {
           // Space on the action row flips between all picked and none.
@@ -668,15 +692,11 @@ export function PlaylistPicker({
 
   // Scroll window so long lists stay on screen, keeping the cursor centered.
   // Rows render exactly one line each (no margins), so the window height is
-  // the rendered height: overflowing the body corrupts Ink's redraw (rows
-  // merge and drop). listRows already covers the standard 2-row header; our
-  // chrome beyond that is the status line (shed first when squashed), the
-  // filter line and its margin, and whatever the parent reserved.
-  const showStatus = listRows >= 6;
-  const height = Math.max(
-    1,
-    listRows - (showStatus ? 1 : 0) - 2 - reserveRows,
-  );
+  // the rendered height (computed above the key handler so page jumps share
+  // it): overflowing the body corrupts Ink's redraw (rows merge and drop).
+  // listRows already covers the standard 2-row header; our chrome beyond that
+  // is the status line (shed first when squashed), the filter line and its
+  // margin, and whatever the parent reserved.
   const cursorRow =
     cursor === 0
       ? 0

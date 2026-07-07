@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { Select } from "@inkjs/ui";
-import { useStore, useHistory, useLibrary, usePlayback } from "../store";
+import {
+  useStore,
+  useHistory,
+  useLibrary,
+  usePlaybackSelector,
+} from "../store";
 import { Header } from "../components/Header";
 import { SourceTabs, type SourceFilter } from "../components/SourceTabs";
 import { TextField } from "../components/TextField";
@@ -42,7 +47,7 @@ export function History() {
   } = useStore();
   const histVersion = useHistory(history);
   const libVersion = useLibrary(library);
-  const playingId = usePlayback(playback).track?.id;
+  const playingId = usePlaybackSelector(playback, (s) => s.track?.id);
   const focused = region === "content";
 
   // Text search + a source tab filter, same controls as the Library.
@@ -117,6 +122,22 @@ export function History() {
     [searching, q, inSource],
   );
 
+  // Memoized: the flat item array must rebuild on data/tab/query changes only,
+  // never on playback-tick or cursor re-renders.
+  const groups = useMemo(
+    () => [
+      {
+        items: visible.map((t) => ({
+          value: t.id,
+          title: t.title,
+          artist: t.artist,
+          meta: formatDuration(t.durationSec),
+        })),
+      },
+    ],
+    [visible],
+  );
+
   // Take over the keyboard only while typing in the search box; a pending
   // delete confirm owns esc so the global one doesn't bounce to the sidebar.
   useEffect(() => {
@@ -167,6 +188,23 @@ export function History() {
       }
     },
     { isActive: focused && confirm !== null },
+  );
+
+  // Stable handler identities, so a memoized SongList can skip re-renders
+  // that only touch this section's local state.
+  const handleDelete = useCallback(
+    (value: string) => {
+      const t = library.get(value);
+      if (t) setConfirm({ id: t.id, title: t.title });
+    },
+    [library],
+  );
+  const handleSelect = useCallback(
+    (value: string) => {
+      const t = library.get(value);
+      if (t) playTrack(t, visible);
+    },
+    [library, playTrack, visible],
   );
 
   if (tracks.length === 0) {
@@ -226,28 +264,13 @@ export function History() {
         <Text dimColor>No matches.</Text>
       ) : (
         <SongList
-          groups={[
-            {
-              items: visible.map((t) => ({
-                value: t.id,
-                title: t.title,
-                artist: t.artist,
-                meta: formatDuration(t.durationSec),
-              })),
-            },
-          ]}
+          groups={groups}
           playingId={playingId}
           focused={focused && !editing && !confirm}
           reserveRows={reserveRows}
           deleteTargetsPlaying
-          onDelete={(value) => {
-            const t = library.get(value);
-            if (t) setConfirm({ id: t.id, title: t.title });
-          }}
-          onSelect={(value) => {
-            const t = library.get(value);
-            if (t) playTrack(t, visible);
-          }}
+          onDelete={handleDelete}
+          onSelect={handleSelect}
         />
       )}
     </Box>

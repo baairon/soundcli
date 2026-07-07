@@ -74,8 +74,12 @@ function extractNextData(html: string): unknown {
 }
 
 // In-memory TTL cache keyed by `${type}:${id}`, mirroring spotipy's GET cache.
-// A playlist enumerated then downloaded is fetched once, not twice.
+// A playlist enumerated then downloaded is fetched once, not twice. Bounded:
+// reads drop an expired hit, writes sweep expired entries and evict the
+// oldest-inserted beyond the cap, so a long session never pins every fetched
+// track list for the life of the process.
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_MAX_ENTRIES = 24;
 interface CacheEntry {
   at: number;
   value: SpotifyPublicPlaylist;
@@ -110,6 +114,7 @@ export async function readPublicEntity(
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
     return hit.value;
   }
+  if (hit) cache.delete(key);
 
   const res = await fetchResilient(
     `https://open.spotify.com/embed/${type}/${id}`,
@@ -145,7 +150,16 @@ export async function readPublicEntity(
         : "Spotify playlist";
   const name = entity.title ?? entity.name ?? fallbackName;
   const value: SpotifyPublicPlaylist = { id, name, tracks };
-  cache.set(key, { at: Date.now(), value });
+  const now = Date.now();
+  for (const [k, e] of cache) {
+    if (now - e.at >= CACHE_TTL_MS) cache.delete(k);
+  }
+  while (cache.size >= CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+  cache.set(key, { at: now, value });
   return value;
 }
 

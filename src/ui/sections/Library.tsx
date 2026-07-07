@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { Select } from "@inkjs/ui";
-import { useStore, useQueueItems, useLibrary, usePlayback } from "../store";
+import {
+  useStore,
+  useQueueDoneCount,
+  useLibrary,
+  usePlaybackSelector,
+} from "../store";
 import { Header } from "../components/Header";
 import { SourceTabs, type SourceFilter } from "../components/SourceTabs";
 import { TextField } from "../components/TextField";
@@ -49,9 +54,9 @@ export function Library() {
     setPendingSearch,
     compact,
   } = useStore();
-  useQueueItems(queue);
+  const doneCount = useQueueDoneCount(queue);
   const libVersion = useLibrary(library);
-  const playingId = usePlayback(playback).track?.id;
+  const playingId = usePlaybackSelector(playback, (s) => s.track?.id);
   const focused = region === "content";
 
   // Text search + a source tab filter.
@@ -72,7 +77,7 @@ export function Library() {
     // downloads and on drift cleanup (prune/merge).
     () => library.all(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [library, queue.doneCount, libVersion],
+    [library, doneCount, libVersion],
   );
 
   // Tabs group by where each file sits on disk, not where it was downloaded
@@ -128,6 +133,46 @@ export function Library() {
         : inSource,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [searching, q, filter, inSource, srcOf],
+  );
+
+  // Memoized: the per-track item arrays must rebuild on data/tab/query changes
+  // only, never on playback-tick or cursor re-renders. Independent of playback
+  // and cursor state by design (playingId reaches SongList separately).
+  const groups = useMemo<SongGroup[]>(() => {
+    const toItem = (t: Track) => ({
+      value: t.id,
+      title: t.title,
+      artist: t.artist,
+      meta: formatDuration(t.durationSec),
+    });
+    if (searching) return [{ items: visible.map(toItem) }];
+    if (filter === "all" && presentSources.length > 1) {
+      return presentSources
+        .map((src) => {
+          const tracks = inSource.filter((t) => srcOf(t) === src);
+          return {
+            title: `${SOURCE_LABELS[src]}  ${ICON.dot}  ${tracks.length}`,
+            items: tracks.map(toItem),
+          };
+        })
+        .filter((g) => g.items.length > 0);
+    }
+    return [{ items: visible.map(toItem) }];
+  }, [searching, visible, filter, presentSources, inSource, srcOf]);
+
+  // Shuffle action for the browse view only; search results play in order.
+  // Memoized so its identity holds across unrelated re-renders.
+  const action = useMemo(
+    () =>
+      !searching && visible.length > 1
+        ? {
+            value: "__shuffle__",
+            label: `${ICON.shuffle} Shuffle ${
+              filter === "all" ? "all" : SOURCE_LABELS[filter]
+            } (${visible.length})`,
+          }
+        : undefined,
+    [searching, visible, filter],
   );
 
   // Take over the keyboard only while typing in the search box; a pending
@@ -222,6 +267,38 @@ export function Library() {
     { isActive: focused && confirm !== null },
   );
 
+  // Stable handler identities, so a memoized SongList can skip re-renders
+  // that only touch this section's local state.
+  const handleDelete = useCallback(
+    (value: string) => {
+      const t = library.get(value);
+      if (t) setConfirm({ id: t.id, title: t.title });
+    },
+    [library],
+  );
+  const handleSelect = useCallback(
+    (value: string) => {
+      if (value === "__shuffle__") {
+        const shuffled = shuffle(visible);
+        if (shuffled.length > 0) playTrack(shuffled[0]!, shuffled);
+        return;
+      }
+      const t = library.get(value);
+      if (t) playTrack(t, visible);
+    },
+    [library, playTrack, visible],
+  );
+  const handleRename = useCallback(
+    (value: string) => {
+      const t = library.get(value);
+      if (t) {
+        setRenamingTrackId(t.id);
+        setNewTrackTitle(t.title);
+      }
+    },
+    [library],
+  );
+
   if (songs.length === 0) {
     return (
       <Box flexDirection="column">
@@ -238,41 +315,7 @@ export function Library() {
     );
   }
 
-  const toItem = (t: Track) => ({
-    value: t.id,
-    title: t.title,
-    artist: t.artist,
-    meta: formatDuration(t.durationSec),
-  });
-
-  let groups: SongGroup[];
-  if (searching) {
-    groups = [{ items: visible.map(toItem) }];
-  } else if (filter === "all" && presentSources.length > 1) {
-    groups = presentSources
-      .map((src) => {
-        const tracks = inSource.filter((t) => srcOf(t) === src);
-        return {
-          title: `${SOURCE_LABELS[src]}  ${ICON.dot}  ${tracks.length}`,
-          items: tracks.map(toItem),
-        };
-      })
-      .filter((g) => g.items.length > 0);
-  } else {
-    groups = [{ items: visible.map(toItem) }];
-  }
-
   const subtitle = `${visible.length.toLocaleString()} song${visible.length === 1 ? "" : "s"}`;
-
-  // Shuffle action for the browse view only; search results play in order.
-  const shuffleLabel = `${ICON.shuffle} Shuffle ${
-    filter === "all" ? "all" : SOURCE_LABELS[filter]
-  } (${visible.length})`;
-
-  const action =
-    !searching && visible.length > 1
-      ? { value: "__shuffle__", label: shuffleLabel }
-      : undefined;
 
   // The search/hint row carries content only while typing, confirming a
   // delete, or showing an active query; when compact and idle, drop it so the
@@ -333,26 +376,9 @@ export function Library() {
           focused={focused && !editing && !confirm && !renaming}
           reserveRows={reserveRows}
           deleteTargetsPlaying
-          onDelete={(value) => {
-            const t = library.get(value);
-            if (t) setConfirm({ id: t.id, title: t.title });
-          }}
-          onSelect={(value) => {
-            if (value === "__shuffle__") {
-              const shuffled = shuffle(visible);
-              if (shuffled.length > 0) playTrack(shuffled[0]!, shuffled);
-              return;
-            }
-            const t = library.get(value);
-            if (t) playTrack(t, visible);
-          }}
-          onRename={(value) => {
-            const t = library.get(value);
-            if (t) {
-              setRenamingTrackId(t.id);
-              setNewTrackTitle(t.title);
-            }
-          }}
+          onDelete={handleDelete}
+          onSelect={handleSelect}
+          onRename={handleRename}
         />
       )}
     </Box>

@@ -272,7 +272,13 @@ export class Playback extends EventEmitter {
         return;
       } catch {
         // mpv failed to start or load: fall through to the external opener.
+        // The failed instance may still own a live process, its IPC socket,
+        // and our listeners; quit() tears all of that down (it is safe on an
+        // already-dead process) so nothing lingers orphaned when the next
+        // play() spawns a fresh mpv. Drop our handle first so the "quit"
+        // event this fires finds it already cleared.
         if (this.mpv === m) this.mpv = null;
+        m.quit();
       }
     }
     this.update({ engine: "external", canControl: false, loading: false });

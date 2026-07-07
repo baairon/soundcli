@@ -17,6 +17,7 @@ import { History as HistorySection } from "../src/ui/sections/History";
 import { Settings } from "../src/ui/sections/Settings";
 import { Sidebar } from "../src/ui/components/Sidebar";
 import { SongList } from "../src/ui/components/SongList";
+import { TextField } from "../src/ui/components/TextField";
 import { NowPlayingBar } from "../src/ui/components/NowPlayingBar";
 import { HelpOverlay } from "../src/ui/components/HelpOverlay";
 import { Welcome } from "../src/ui/views/Welcome";
@@ -67,6 +68,9 @@ const escTick = () => new Promise<void>((r) => setTimeout(r, 25));
 
 const DOWN = "\u001b[B";
 const ESC = "\u001b";
+
+const HOME = `${ESC}[H`;
+const END = `${ESC}[F`;
 
 describe("single-page sections render", () => {
   it("library shows the empty state", () => {
@@ -358,6 +362,52 @@ describe("single-page sections render", () => {
     const frame = lastFrame() ?? "";
     expect(frame).toMatch(/1\s+First Track/);
     expect(frame).toMatch(/2\s+Second Track/);
+  });
+
+  it("SongList jumps to the last and first row on End/Home", async () => {
+    const groups = [
+      {
+        items: [
+          { value: "a", title: "Alpha Track" },
+          { value: "b", title: "Beta Track" },
+          { value: "c", title: "Gamma Track" },
+          { value: "d", title: "Delta Track" },
+          { value: "e", title: "Omega Track" },
+        ],
+      },
+    ];
+    const { stdin, lastFrame } = render(
+      wrap(
+        <SongList groups={groups} focused onSelect={() => {}} />,
+        makeStore({ listRows: 3 }),
+      ),
+    );
+    await tick();
+    stdin.write(END);
+    await tick();
+    expect(lastFrame() ?? "").toContain("Omega Track");
+    expect(lastFrame() ?? "").not.toContain("Alpha Track");
+    stdin.write(HOME);
+    await tick();
+    expect(lastFrame() ?? "").toContain("Alpha Track");
+    expect(lastFrame() ?? "").not.toContain("Omega Track");
+  });
+
+  it("TextField moves the cursor to the ends on Home/End", async () => {
+    const got: string[] = [];
+    const { stdin } = render(<TextField onChange={(v) => got.push(v)} />);
+    await tick();
+    stdin.write("abc");
+    await tick();
+    stdin.write(HOME);
+    await tick();
+    stdin.write("x"); // lands at the start only if Home moved the cursor
+    await tick();
+    stdin.write(END);
+    await tick();
+    stdin.write("z"); // and back at the end after End
+    await tick();
+    expect(got.at(-1)).toBe("xabcz");
   });
 });
 

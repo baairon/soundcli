@@ -19,8 +19,8 @@ function track(id: string, filePath: string): Track {
 /** Records removals instead of touching the user's real index file. */
 class FakeLibrary {
   removed: string[] = [];
-  async remove(id: string): Promise<void> {
-    this.removed.push(id);
+  async removeMany(ids: string[]): Promise<void> {
+    this.removed.push(...ids);
   }
 }
 

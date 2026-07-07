@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import { Text } from "ink";
 import { ACCENT_RAMP, lerpHex } from "../theme";
 
@@ -7,18 +8,29 @@ import { ACCENT_RAMP, lerpHex } from "../theme";
  * along the ramp; the remainder stays a dim track. Always renders exactly
  * `width` cells so surrounding layout never shifts as it fills.
  */
-export function GradientBar({ pct, width }: { pct: number; width: number }) {
+export const GradientBar = memo(function GradientBar({
+  pct,
+  width,
+}: {
+  pct: number;
+  width: number;
+}) {
   const clamped = Math.max(0, Math.min(100, pct));
   const filled = Math.round((clamped / 100) * width);
-  const last = Math.max(1, width - 1);
+  // The per-cell lerp only depends on the integer cell count, so ticks that
+  // land on the same cell reuse the same elements instead of re-lerping.
+  const cells = useMemo(() => {
+    const last = Math.max(1, width - 1);
+    return Array.from({ length: filled }, (_, i) => (
+      <Text key={i} color={lerpHex(ACCENT_RAMP[0], ACCENT_RAMP[1], i / last)}>
+        █
+      </Text>
+    ));
+  }, [filled, width]);
   return (
     <Text>
-      {Array.from({ length: filled }, (_, i) => (
-        <Text key={i} color={lerpHex(ACCENT_RAMP[0], ACCENT_RAMP[1], i / last)}>
-          █
-        </Text>
-      ))}
+      {cells}
       <Text dimColor>{"░".repeat(Math.max(0, width - filled))}</Text>
     </Text>
   );
-}
+});

@@ -176,12 +176,11 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       if (initialAdd) cfg.firstRunComplete = true;
       const library = await LibraryStore.load();
       // One-time layout migration (pre-owner files move into their handle
-      // folder), then silent drift hygiene: drop dead entries + dupes. Both
-      // passes share one existence cache so each file is stat'd once per boot.
+      // folder) must finish before anything reads the library; the existence
+      // cache it fills feeds the deferred reconcile below so each file is
+      // still stat'd only once per boot.
       const exists = new Map<string, boolean>();
       await migrateOwnerLayout(library, cfg, exists);
-      await reconcileLibrary(library, exists, cfg.libraryDir);
-      lastReconcile.current = Date.now();
       // Library is now the source of truth, so drop the legacy yt-dlp archive.
       void fs.rm(legacyArchiveFile, { force: true }).catch(() => {});
       const binaries = await ensureBinaries(setStatus);
@@ -196,8 +195,24 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       if (lastId) {
         const lastTrack = library.all().find((t) => t.id === lastId);
         if (lastTrack) {
-          lastPlayedId = lastTrack.id;
-          void playback.play(lastTrack, [lastTrack], 0, true).catch(() => {});
+          // Reconcile now runs behind the first paint, so a file deleted
+          // while the app was closed hasn't been pruned yet; one stat keeps
+          // the resume from loading a dead row (and feeds the exists cache
+          // so the deferred reconcile doesn't stat it again).
+          let present = exists.get(lastTrack.filePath);
+          if (present === undefined) {
+            present = await fs
+              .access(lastTrack.filePath)
+              .then(() => true)
+              .catch(() => false);
+            exists.set(lastTrack.filePath, present);
+          }
+          if (present) {
+            lastPlayedId = lastTrack.id;
+            void playback
+              .play(lastTrack, [lastTrack], 0, true)
+              .catch(() => {});
+          }
         }
       }
 
@@ -279,6 +294,27 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       }
       setConfigState(cfg);
       setBoot({ library, binaries, queue, playback, history });
+      // Silent drift hygiene (drop dead entries + dupes) runs behind the
+      // first paint: a full music-dir walk on a big library kept the user on
+      // the boot spinner, and every heal bumps the library version so the UI
+      // catches up on its own. It holds the same in-flight flag runReconcile
+      // checks, so a focus-triggered run can't overlap it. A failure stays
+      // silent: the app is fully usable with a stale index, the next
+      // section-focus reconcile retries anyway, and throwing the setup-error
+      // screen over a working session (with the r retry gated off once boot
+      // is set) would be worse than the drift.
+      if (!reconciling.current) {
+        reconciling.current = true;
+        void reconcileLibrary(library, exists, cfg.libraryDir)
+          .then((r) => {
+            if (r.prunedMissing > 0) history.retain((id) => library.has(id));
+          })
+          .catch(() => {})
+          .finally(() => {
+            lastReconcile.current = Date.now();
+            reconciling.current = false;
+          });
+      }
       if (initialAdd) {
         setSection("download");
         setRegion("content");
@@ -300,6 +336,9 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   useEffect(
     () => () => {
       boot?.queue.suspend();
+      // Library writes are debounced; flush synchronously so a mutation made
+      // in the last half second still lands before the process goes away.
+      boot?.library.flushSync();
       boot?.playback.quit();
     },
     [boot],
@@ -344,6 +383,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
 
   const quitAll = useCallback(() => {
     boot?.queue.suspend();
+    boot?.library.flushSync();
     boot?.playback.quit();
     exit();
   }, [boot, exit]);

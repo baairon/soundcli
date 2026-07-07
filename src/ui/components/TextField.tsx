@@ -110,6 +110,16 @@ export function TextField({
         setCursor(Math.min(value.length, cursor + 1));
         return;
       }
+      // Home/End arrive with an empty `input`, so they must be handled
+      // before the empty-input ignore below.
+      if (key.home) {
+        setCursor(0);
+        return;
+      }
+      if (key.end) {
+        setCursor(value.length);
+        return;
+      }
       if (key.backspace || key.delete) {
         apply(deleteBefore(value, cursor));
         return;

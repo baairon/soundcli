@@ -7,7 +7,7 @@ import type { Track } from "./types";
 
 /** The one Library method this module needs (narrow so tests can stub it). */
 interface RemovesTracks {
-  remove(id: string): Promise<void>;
+  removeMany(ids: string[]): Promise<void>;
 }
 
 /**
@@ -24,8 +24,10 @@ export async function deleteTracks(
   libraryDir: string,
 ): Promise<{ removed: number; failed: number }> {
   const root = path.resolve(libraryDir);
-  let removed = 0;
   let failed = 0;
+  // Index entries to drop, batched into one removeMany so a whole set deletes
+  // with a single notify + index write instead of one per track.
+  const removedIds: string[] = [];
   for (const t of tracks) {
     try {
       await fs.unlink(t.filePath);
@@ -36,10 +38,10 @@ export async function deleteTracks(
       }
     }
     await pruneEmptyDirs(path.dirname(t.filePath), root);
-    await library.remove(t.id);
-    removed++;
+    removedIds.push(t.id);
   }
-  return { removed, failed };
+  await library.removeMany(removedIds);
+  return { removed: removedIds.length, failed };
 }
 
 /**

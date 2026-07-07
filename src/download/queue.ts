@@ -124,6 +124,14 @@ function failureStreakLimit(): number {
  */
 const PERMANENT_STREAK_NOTICE = 5;
 
+/**
+ * Newest error and unverified-match rows kept in the list. Both stay visible
+ * until the user clears them, but a marathon session of failing batches must
+ * not grow the queue without bound; evicted rows fold into the cleared
+ * counters so the totals stay honest.
+ */
+const RETAINED_ROWS_CAP = 200;
+
 /** rateLimitReason while the queue is parked waiting for the audio engine. */
 export const WAITING_FOR_TOOLS = "waiting for tools";
 
@@ -151,6 +159,8 @@ export class DownloadQueue extends EventEmitter {
   private stopped = false;
   private clearedDone = 0;
   private clearedSkipped = 0;
+  private clearedFailed = 0;
+  private clearedCanceled = 0;
   private batchInputTotal = 0;
   private batchAlreadySaved = 0;
   private batchNewTracks = 0;
@@ -184,6 +194,15 @@ export class DownloadQueue extends EventEmitter {
    * (and reviving) the queue. A fresh Add starts a new, un-aborted session.
    */
   private gatherController: AbortController | null = null;
+  /**
+   * trackSignature of every library entry, for the cross-source "same song"
+   * dedupe. A full library walk per enqueue call is quadratic on a
+   * multi-playlist "download all" (one enqueue per gathered playlist), so the
+   * set is rebuilt only when the library version has moved since the last
+   * build. Per-call additions layer into a separate set, never into this one.
+   */
+  private librarySignatures: Set<string> | null = null;
+  private librarySignaturesVersion = -1;
 
   constructor(
     private config: Config,
@@ -227,8 +246,8 @@ export class DownloadQueue extends EventEmitter {
   stats(): QueueStats {
     let done = this.clearedDone;
     let skipped = this.clearedSkipped;
-    let failed = 0;
-    let canceled = 0;
+    let failed = this.clearedFailed;
+    let canceled = this.clearedCanceled;
     let downloading = 0;
     let pending = 0;
     let paused = 0;
@@ -241,7 +260,12 @@ export class DownloadQueue extends EventEmitter {
       else if (i.status === "pending") pending++;
       else if (i.status === "paused") paused++;
     }
-    const total = this.items.length + this.clearedDone + this.clearedSkipped;
+    const total =
+      this.items.length +
+      this.clearedDone +
+      this.clearedSkipped +
+      this.clearedFailed +
+      this.clearedCanceled;
     const finished = done + skipped + failed + canceled;
     return {
       total,
@@ -313,6 +337,45 @@ export class DownloadQueue extends EventEmitter {
         else if (item.status === "skipped") this.clearedSkipped++;
       }
     }
+    this.compactRetained();
+  }
+
+  /**
+   * Drop rows that no longer need a line of their own: canceled items (the
+   * summary counters already tell that story) and the oldest error /
+   * unverified-match rows beyond the retention cap. Every eviction lands in a
+   * cleared counter, so stats() and doneCount read the same before and after.
+   * Items are stored in enqueue order, so the front of the array is oldest.
+   */
+  private compactRetained(): void {
+    let canceled = 0;
+    let errors = 0;
+    let unverified = 0;
+    for (const i of this.items) {
+      if (i.status === "canceled") canceled++;
+      else if (i.status === "error") errors++;
+      else if (i.status === "done" && i.unverifiedMatch) unverified++;
+    }
+    let dropErrors = Math.max(0, errors - RETAINED_ROWS_CAP);
+    let dropUnverified = Math.max(0, unverified - RETAINED_ROWS_CAP);
+    if (canceled === 0 && dropErrors === 0 && dropUnverified === 0) return;
+    this.items = this.items.filter((i) => {
+      if (i.status === "canceled") {
+        this.clearedCanceled++;
+        return false;
+      }
+      if (i.status === "error" && dropErrors > 0) {
+        dropErrors--;
+        this.clearedFailed++;
+        return false;
+      }
+      if (i.status === "done" && i.unverifiedMatch && dropUnverified > 0) {
+        dropUnverified--;
+        this.clearedDone++;
+        return false;
+      }
+      return true;
+    });
   }
 
   clearFinished(): void {
@@ -324,6 +387,8 @@ export class DownloadQueue extends EventEmitter {
     );
     this.clearedDone = 0;
     this.clearedSkipped = 0;
+    this.clearedFailed = 0;
+    this.clearedCanceled = 0;
     this.batchInputTotal = 0;
     this.batchAlreadySaved = 0;
     this.batchNewTracks = 0;
@@ -345,6 +410,8 @@ export class DownloadQueue extends EventEmitter {
     this.items = [];
     this.clearedDone = 0;
     this.clearedSkipped = 0;
+    this.clearedFailed = 0;
+    this.clearedCanceled = 0;
     this.batchInputTotal = 0;
     this.batchAlreadySaved = 0;
     this.batchNewTracks = 0;
@@ -626,6 +693,10 @@ export class DownloadQueue extends EventEmitter {
       }
     }
     for (const c of this.controllers.values()) c.abort();
+    // Fold the freshly canceled rows into the counters right away: items that
+    // never reached run() have no other path through clearIfFinished, and a
+    // canceled batch left in place would grow the list across batches forever.
+    this.compactRetained();
     this.emit("update");
     this.scheduleSave();
   }
@@ -654,6 +725,26 @@ export class DownloadQueue extends EventEmitter {
     this.gatherController = new AbortController();
     return this.gatherController.signal;
   }
+
+  /**
+   * Signatures of every library entry, cached until the library changes.
+   * Callers must treat the returned set as read-only: batch-local signatures
+   * belong in their own layer, or the cache would leak this batch's state
+   * into the next.
+   */
+  private ownedSignatureSet(): Set<string> {
+    const getVersion = (this.library as Library & { getVersion?: () => number })
+      .getVersion;
+    const version =
+      typeof getVersion === "function" ? getVersion.call(this.library) : 0;
+    if (!this.librarySignatures || this.librarySignaturesVersion !== version) {
+      const set = new Set<string>();
+      for (const t of this.library.all()) set.add(trackSignature(t));
+      this.librarySignatures = set;
+      this.librarySignaturesVersion = version;
+    }
+    return this.librarySignatures;
+  }
   /**
    * Add tracks to the queue while de-duping against the library, current
    * queue, and same-title/artist matches from other sources. The return tells UI
@@ -670,6 +761,8 @@ export class DownloadQueue extends EventEmitter {
     if (this.items.length === 0) {
       this.clearedDone = 0;
       this.clearedSkipped = 0;
+      this.clearedFailed = 0;
+      this.clearedCanceled = 0;
       this.batchInputTotal = 0;
       this.batchAlreadySaved = 0;
       this.batchNewTracks = 0;
@@ -680,13 +773,11 @@ export class DownloadQueue extends EventEmitter {
     const blocked = new Set<string>();
     // Signatures of songs we already own or have queued, so the *same song*
     // never downloads twice even under a different id or from another source.
-    const ownedSignatures = new Set<string>();
+    // The library-derived set is cached per library version (a multi-playlist
+    // gather calls enqueue once per playlist); queue items and this call's
+    // own additions layer into the separate per-call set.
+    const ownedSignatures = this.ownedSignatureSet();
     const signatures = new Set<string>();
-    for (const t of this.library.all()) {
-      const sig = trackSignature(t);
-      ownedSignatures.add(sig);
-      signatures.add(sig);
-    }
     for (const i of this.items) {
       if (
         i.status === "pending" ||
@@ -721,7 +812,12 @@ export class DownloadQueue extends EventEmitter {
         // (queue a local copy operation rather than hiding the track as a
         // skip), or saved under a bare id title (let run() heal the name).
         alreadySaved++;
-      } else if (inLibrary || blocked.has(id) || signatures.has(sig)) {
+      } else if (
+        inLibrary ||
+        blocked.has(id) ||
+        ownedSignatures.has(sig) ||
+        signatures.has(sig)
+      ) {
         if (inLibrary || ownedSignatures.has(sig)) alreadySaved++;
         if (
           existing &&

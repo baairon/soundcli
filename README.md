@@ -81,8 +81,8 @@ soundcli runs on your computer and nowhere else. There are no accounts, no login
 
 <a href="https://www.star-history.com/?repos=baairon%2Fsoundcli&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&theme=dark&legend=top-left&sealed_token=1B2Z471aDZnIjD1M9OGO-fSaeiux6G-704pdimJjowwPhtEDC6gMoGcPmjawn2-mr3BpYFniP3Ky0X04QUC75RN2gInfoaNNDeMRzKOSLjeKXoiMLBdAEBZLoMUgJAZ036ON4f0ZUOHxlwo3DyNgqGkV6Z6AM_WCbEAqSXdHXP2vkf5nJNX6BmXo9j4I" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&legend=top-left&sealed_token=1B2Z471aDZnIjD1M9OGO-fSaeiux6G-704pdimJjowwPhtEDC6gMoGcPmjawn2-mr3BpYFniP3Ky0X04QUC75RN2gInfoaNNDeMRzKOSLjeKXoiMLBdAEBZLoMUgJAZ036ON4f0ZUOHxlwo3DyNgqGkV6Z6AM_WCbEAqSXdHXP2vkf5nJNX6BmXo9j4I" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=baairon/soundcli&type=date&legend=top-left&sealed_token=1B2Z471aDZnIjD1M9OGO-fSaeiux6G-704pdimJjowwPhtEDC6gMoGcPmjawn2-mr3BpYFniP3Ky0X04QUC75RN2gInfoaNNDeMRzKOSLjeKXoiMLBdAEBZLoMUgJAZ036ON4f0ZUOHxlwo3DyNgqGkV6Z6AM_WCbEAqSXdHXP2vkf5nJNX6BmXo9j4I" />
  </picture>
 </a>

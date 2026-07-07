@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { useStore } from "../store";
 import { wrapStep } from "../move";
@@ -86,6 +86,12 @@ function scrollStart(rows: Row[], cursorRow: number, height: number): number {
  * (instead of @inkjs/ui Select) so the cursor never resets when the now-playing
  * row changes, and every row is truncated to exactly one line. The cursor moves
  * over selectable rows only, skipping section headers.
+ *
+ * Must NOT be wrapped in React.memo: Ink's useInput keeps its handler fresh
+ * via useEffectEvent, and react-reconciler 0.33 never swaps effect-event
+ * impls on SimpleMemoComponent fibers, so a memoized SongList's keyboard
+ * handler stays frozen at its mount closure (cursor stuck, enter/d/t acting
+ * on the wrong row). Renders are cheap anyway: the flatten below is memoized.
  */
 export function SongList({
   groups,
@@ -102,32 +108,40 @@ export function SongList({
   const { listRows } = useStore();
   const [cursor, setCursor] = useState(0);
 
-  // Flatten to display rows, numbering only the selectable ones.
-  const rows: Row[] = [];
-  let idx = 0;
-  let no = 0;
-  if (action) {
-    rows.push({ kind: "action", value: action.value, label: action.label, idx });
-    idx++;
-  }
-  for (const g of groups) {
-    if (g.items.length === 0) continue;
-    if (g.title) rows.push({ kind: "header", title: g.title });
-    for (const item of g.items) {
-      no++;
-      rows.push({ kind: "item", item, idx, no });
+  // Flatten to display rows, numbering only the selectable ones. Memoized on
+  // the data itself: a cursor move or playback tick must only pay for the
+  // clamp, an O(1) row lookup, and the visible slice, never a full re-flatten
+  // of thousands of rows.
+  const { rows, selectableCount, numWidth, values, rowOfIdx } = useMemo(() => {
+    const rows: Row[] = [];
+    // Row position of each selectable idx, so cursor lookups stay O(1).
+    const rowOfIdx: number[] = [];
+    let idx = 0;
+    let no = 0;
+    if (action) {
+      rowOfIdx.push(rows.length);
+      rows.push({ kind: "action", value: action.value, label: action.label, idx });
       idx++;
     }
-  }
-  const selectableCount = idx;
-  // Width of the widest track number, so the index column stays aligned.
-  const numWidth = String(no).length;
-  const values: string[] = rows
-    .filter(
-      (r): r is Extract<Row, { idx: number }> =>
-        r.kind === "action" || r.kind === "item",
-    )
-    .map((r) => (r.kind === "action" ? r.value : r.item.value));
+    for (const g of groups) {
+      if (g.items.length === 0) continue;
+      if (g.title) rows.push({ kind: "header", title: g.title });
+      for (const item of g.items) {
+        no++;
+        rowOfIdx.push(rows.length);
+        rows.push({ kind: "item", item, idx, no });
+        idx++;
+      }
+    }
+    const values: string[] = rows
+      .filter(
+        (r): r is Extract<Row, { idx: number }> =>
+          r.kind === "action" || r.kind === "item",
+      )
+      .map((r) => (r.kind === "action" ? r.value : r.item.value));
+    // Width of the widest track number, so the index column stays aligned.
+    return { rows, selectableCount: idx, numWidth: String(no).length, values, rowOfIdx };
+  }, [groups, action]);
 
   // Keep the cursor in range if the list shrank between renders.
   const clamped = Math.min(cursor, Math.max(0, selectableCount - 1));
@@ -144,6 +158,8 @@ export function SongList({
       else if (key.pageUp) setCursor(Math.max(0, clamped - page));
       else if (key.pageDown)
         setCursor(Math.min(selectableCount - 1, clamped + page));
+      else if (key.home) setCursor(0);
+      else if (key.end) setCursor(selectableCount - 1);
       else if (key.return) {
         const v = values[clamped];
         if (v) onSelect(v);
@@ -153,11 +169,11 @@ export function SongList({
         if (deleteTargetsPlaying && playingId) {
           onDelete(playingId);
         } else {
-          const row = rows.find((r) => r.kind === "item" && r.idx === clamped);
+          const row = rows[rowOfIdx[clamped] ?? -1];
           if (row?.kind === "item") onDelete(row.item.value);
         }
       } else if (input === "t" && onRename) {
-        const row = rows.find((r) => r.kind === "item" && r.idx === clamped);
+        const row = rows[rowOfIdx[clamped] ?? -1];
         if (row?.kind === "item") onRename(row.item.value);
       }
     },
@@ -168,9 +184,7 @@ export function SongList({
   // window must fit within the lines the section left us, or the body overflows
   // the terminal and Ink's incremental redraw mangles rows (merged / dropped).
   const height = Math.max(1, listRows - reserveRows);
-  const cursorRow = rows.findIndex(
-    (r) => (r.kind === "action" || r.kind === "item") && r.idx === clamped,
-  );
+  const cursorRow = rowOfIdx[clamped] ?? -1;
   const start = scrollStart(rows, cursorRow, height);
   const visible = rows.slice(start, start + height);
 

@@ -233,6 +233,9 @@ export async function downloadTrack(
   });
 
   let meta: TrackMeta | undefined;
+  // Non-progress output, kept only for the failure message tail: a rolling
+  // window suffices (the last lines name the error), and a warning-spewing
+  // download must not grow the buffer for its whole runtime.
   const errLines: string[] = [];
   const handle = (line: string): void => {
     if (line.startsWith("SCPROG\t")) {
@@ -242,6 +245,7 @@ export async function downloadTrack(
       meta = parseMeta(line);
     } else if (line.trim()) {
       errLines.push(line);
+      if (errLines.length > 50) errLines.shift();
     }
   };
 

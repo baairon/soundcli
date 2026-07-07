@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { libraryIndexFile } from "../config/paths";
 import { fuzzyFilter } from "../util/fuzzy";
@@ -13,6 +13,11 @@ export class Library {
   private chain: Promise<void> = Promise.resolve();
   private version = 0;
   private listeners = new Set<() => void>();
+  /** Cached newest-first array; invalidated on every mutation. Callers treat
+   *  the returned array as immutable, which also gives memo-friendly identity. */
+  private sorted: Track[] | null = null;
+  private dirty = false;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor(index: LibraryIndex) {
     this.index = index;
@@ -33,6 +38,7 @@ export class Library {
 
   private notify(): void {
     this.version++;
+    this.sorted = null;
     for (const fn of this.listeners) fn();
   }
 
@@ -55,9 +61,12 @@ export class Library {
   }
 
   all(): Track[] {
-    return Object.values(this.index.tracks).sort((a, b) =>
-      b.addedAt.localeCompare(a.addedAt),
-    );
+    if (!this.sorted) {
+      this.sorted = Object.values(this.index.tracks).sort((a, b) =>
+        b.addedAt.localeCompare(a.addedAt),
+      );
+    }
+    return this.sorted;
   }
 
   get(id: string): Track | undefined {
@@ -81,7 +90,7 @@ export class Library {
   async upsert(track: Track): Promise<void> {
     this.index.tracks[track.id] = track;
     this.notify();
-    await this.persist();
+    this.schedulePersist();
   }
 
   /** Apply many track updates with a single notify + persist. */
@@ -89,26 +98,69 @@ export class Library {
     if (tracks.length === 0) return;
     for (const track of tracks) this.index.tracks[track.id] = track;
     this.notify();
-    await this.persist();
+    this.schedulePersist();
   }
 
   async remove(id: string): Promise<void> {
     delete this.index.tracks[id];
     this.notify();
-    await this.persist();
+    this.schedulePersist();
+  }
+
+  /** Remove many tracks with a single notify + persist. */
+  async removeMany(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    for (const id of ids) delete this.index.tracks[id];
+    this.notify();
+    this.schedulePersist();
   }
 
   async clear(): Promise<void> {
     this.index.tracks = {};
     this.notify();
-    await this.persist();
+    this.schedulePersist();
+  }
+
+  /**
+   * Coalesce bursts of mutations (download batches, playlist deletes) into one
+   * whole-index write instead of one per track. A crash inside the window
+   * loses only index entries, and reconcile re-links them from disk next boot.
+   */
+  private schedulePersist(): void {
+    this.dirty = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      if (!this.dirty) return;
+      this.dirty = false;
+      void this.persist();
+    }, 500);
+    this.saveTimer.unref?.();
+  }
+
+  /** Write any pending index changes synchronously; called on app quit. */
+  flushSync(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (!this.dirty) return;
+    this.dirty = false;
+    try {
+      mkdirSync(path.dirname(libraryIndexFile), { recursive: true });
+      const tmp = `${libraryIndexFile}.tmp`;
+      writeFileSync(tmp, JSON.stringify(this.index), "utf8");
+      renameSync(tmp, libraryIndexFile);
+    } catch {
+      // best effort on exit
+    }
   }
 
   private persist(): Promise<void> {
     this.chain = this.chain.then(async () => {
       await fs.mkdir(path.dirname(libraryIndexFile), { recursive: true });
       const tmp = `${libraryIndexFile}.tmp`;
-      await fs.writeFile(tmp, JSON.stringify(this.index, null, 2), "utf8");
+      await fs.writeFile(tmp, JSON.stringify(this.index), "utf8");
       await fs.rename(tmp, libraryIndexFile);
     });
     return this.chain;

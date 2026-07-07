@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { Select } from "@inkjs/ui";
-import { useStore, useQueueItems, useLibrary, usePlayback } from "../store";
+import {
+  useStore,
+  useQueueDoneCount,
+  useLibrary,
+  usePlaybackSelector,
+} from "../store";
 import { Header } from "../components/Header";
 import { SourceTabs, type SourceFilter } from "../components/SourceTabs";
 import { TextField } from "../components/TextField";
@@ -38,6 +43,16 @@ type Confirm =
   | { kind: "song"; id: string; label: string }
   | { kind: "set"; key: string; label: string; count: number };
 
+// Module scope: pure row helpers, so the memoized groups and callbacks below
+// never need them as deps.
+const setLabel = (s: SetInfo): string => s.name;
+
+const toSetItem = (s: SetInfo) => ({
+  value: s.key,
+  title: setLabel(s),
+  meta: `${s.tracks.length} song${s.tracks.length === 1 ? "" : "s"}`,
+});
+
 /**
  * Browse the library by set (playlist / likes collection) instead of as one
  * big song list: a two-level drill-down. The sets level groups by source;
@@ -57,9 +72,9 @@ export function Playlists() {
     playback,
     compact,
   } = useStore();
-  useQueueItems(queue);
+  const doneCount = useQueueDoneCount(queue);
   const libVersion = useLibrary(library);
-  const playingId = usePlayback(playback).track?.id;
+  const playingId = usePlaybackSelector(playback, (s) => s.track?.id);
   const focused = region === "content";
   const [view, setView] = useState<View>({ kind: "sets" });
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -79,7 +94,7 @@ export function Playlists() {
     // on drift cleanup (prune/merge).
     () => library.all(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [library, queue.doneCount, libVersion],
+    [library, doneCount, libVersion],
   );
 
   // Bucket tracks into sets, preserving first-appearance (newest-first) order.
@@ -153,8 +168,6 @@ export function Playlists() {
     const base = searching ? filteredSets : sets;
     return filter === "all" ? base : base.filter((s) => s.source === filter);
   }, [sets, filteredSets, searching, filter]);
-
-  const setLabel = (s: SetInfo): string => s.name;
 
   const active =
     view.kind === "songs" ? sets.find((s) => s.key === view.setKey) : undefined;
@@ -335,6 +348,112 @@ export function Playlists() {
     [active, sq, songQ],
   );
 
+  // Row objects and handlers keep a stable identity between renders so the
+  // memoized SongList can skip playback-tick and cursor re-renders (playingId
+  // stays a separate prop; the rows never depend on it).
+  const songGroups = useMemo<SongGroup[]>(
+    () => [
+      {
+        items: shown.map((t) => ({
+          value: t.id,
+          title: t.title,
+          artist: t.artist,
+          meta: formatDuration(t.durationSec),
+        })),
+      },
+    ],
+    [shown],
+  );
+
+  const shuffleAction = useMemo(
+    () =>
+      shown.length > 1
+        ? {
+            value: "__shuffle__",
+            label: `${ICON.shuffle} Shuffle`,
+          }
+        : undefined,
+    [shown],
+  );
+
+  const handleSongDelete = useCallback(
+    (value: string) => {
+      const t = library.get(value);
+      if (t) setConfirm({ kind: "song", id: t.id, label: t.title });
+    },
+    [library],
+  );
+
+  const handleSongSelect = useCallback(
+    (value: string) => {
+      if (value === "__shuffle__") {
+        const list = shuffledOrder(shown.length, -1).map((i) => shown[i]!);
+        if (list.length > 0) playTrack(list[0]!, list);
+        return;
+      }
+      const t = library.get(value);
+      if (t) playTrack(t, shown);
+    },
+    [library, playTrack, shown],
+  );
+
+  const handleSongRename = useCallback(
+    (value: string) => {
+      const t = library.get(value);
+      if (t) {
+        setRenamingTrackId(t.id);
+        setNewTrackTitle(t.title);
+      }
+    },
+    [library],
+  );
+
+  // Sets-view rows, grouped by source unless a search or tab narrows the view.
+  const setGroups = useMemo<SongGroup[]>(() => {
+    if (searching || filter !== "all" || presentSources.length <= 1) {
+      return [{ items: visibleSets.map(toSetItem) }];
+    }
+    return presentSources
+      .map((src) => {
+        const inSrc = visibleSets.filter((s) => s.source === src);
+        return {
+          title: `${SOURCE_LABELS[src]}  ${ICON.dot}  ${inSrc.length}`,
+          items: inSrc.map(toSetItem),
+        };
+      })
+      .filter((g) => g.items.length > 0);
+  }, [searching, filter, presentSources, visibleSets]);
+
+  const handleSetDelete = useCallback(
+    (value: string) => {
+      const s = sets.find((x) => x.key === value);
+      if (s)
+        setConfirm({
+          kind: "set",
+          key: s.key,
+          label: setLabel(s),
+          count: s.tracks.length,
+        });
+    },
+    [sets],
+  );
+
+  const handleSetSelect = useCallback(
+    (value: string) => setView({ kind: "songs", setKey: value }),
+    [],
+  );
+
+  const handleSetRename = useCallback(
+    (value: string) => {
+      const s = sets.find((x) => x.key === value);
+      if (s) {
+        setRenamingSetKey(s.key);
+        setNewPlaylistName(s.name);
+      }
+    },
+    [sets],
+  );
+
   if (sets.length === 0) {
     return (
       <Box flexDirection="column">
@@ -410,24 +529,8 @@ export function Playlists() {
         ) : (
           <SongList
             key={active.key}
-            groups={[
-              {
-                items: shown.map((t) => ({
-                  value: t.id,
-                  title: t.title,
-                  artist: t.artist,
-                  meta: formatDuration(t.durationSec),
-                })),
-              },
-            ]}
-            action={
-              sn > 1
-                ? {
-                    value: "__shuffle__",
-                    label: `${ICON.shuffle} Shuffle`,
-                  }
-                : undefined
-            }
+            groups={songGroups}
+            action={shuffleAction}
             numbered
             playingId={playingId}
             focused={focused && !confirm && !renamingTrack && !songFiltering}
@@ -439,51 +542,13 @@ export function Playlists() {
                   : 2
                 : 0
             }
-            onDelete={(value) => {
-              const t = library.get(value);
-              if (t) setConfirm({ kind: "song", id: t.id, label: t.title });
-            }}
-            onSelect={(value) => {
-              if (value === "__shuffle__") {
-                const list = shuffledOrder(sn, -1).map((i) => shown[i]!);
-                if (list.length > 0) playTrack(list[0]!, list);
-                return;
-              }
-              const t = library.get(value);
-              if (t) playTrack(t, shown);
-            }}
-            onRename={(value) => {
-              const t = library.get(value);
-              if (t) {
-                setRenamingTrackId(t.id);
-                setNewTrackTitle(t.title);
-              }
-            }}
+            onDelete={handleSongDelete}
+            onSelect={handleSongSelect}
+            onRename={handleSongRename}
           />
         )}
       </Box>
     );
-  }
-
-  const toSetItem = (s: SetInfo) => ({
-    value: s.key,
-    title: setLabel(s),
-    meta: `${s.tracks.length} song${s.tracks.length === 1 ? "" : "s"}`,
-  });
-
-  let groups: SongGroup[];
-  if (searching || filter !== "all" || presentSources.length <= 1) {
-    groups = [{ items: visibleSets.map(toSetItem) }];
-  } else {
-    groups = presentSources
-      .map((src) => {
-        const inSrc = visibleSets.filter((s) => s.source === src);
-        return {
-          title: `${SOURCE_LABELS[src]}  ${ICON.dot}  ${inSrc.length}`,
-          items: inSrc.map(toSetItem),
-        };
-      })
-      .filter((g) => g.items.length > 0);
   }
 
   const subtitle = `${visibleSets.length} playlist${visibleSets.length === 1 ? "" : "s"}`;
@@ -541,27 +606,12 @@ export function Playlists() {
       ) : (
         <SongList
           key="sets"
-          groups={groups}
+          groups={setGroups}
           focused={focused && !confirm && !filtering && !renamingSet}
           reserveRows={reserveRows}
-          onDelete={(value) => {
-            const s = sets.find((x) => x.key === value);
-            if (s)
-              setConfirm({
-                kind: "set",
-                key: s.key,
-                label: setLabel(s),
-                count: s.tracks.length,
-              });
-          }}
-          onSelect={(value) => setView({ kind: "songs", setKey: value })}
-          onRename={(value) => {
-            const s = sets.find((x) => x.key === value);
-            if (s) {
-              setRenamingSetKey(s.key);
-              setNewPlaylistName(s.name);
-            }
-          }}
+          onDelete={handleSetDelete}
+          onSelect={handleSetSelect}
+          onRename={handleSetRename}
         />
       )}
     </Box>

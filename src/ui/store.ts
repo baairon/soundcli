@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { Binaries } from "../bin/binaries";
 import type { Config } from "../config/config";
 import type { DownloadQueue, QueueItem } from "../download/queue";
@@ -128,6 +128,50 @@ export function useHistory(history: PlayHistory): number {
     return off;
   }, [history]);
   return version;
+}
+
+/**
+ * Subscribe to a single slice of playback state. Re-renders only when the
+ * selected value changes (Object.is), so a 1 Hz position tick or a seek does
+ * not wake list sections that only care about the playing track id.
+ */
+export function usePlaybackSelector<T>(
+  playback: Playback,
+  selector: (s: PlaybackState) => T,
+): T {
+  const selRef = useRef(selector);
+  selRef.current = selector;
+  const [value, setValue] = useState<T>(() => selector(playback.getState()));
+  useEffect(() => {
+    const on = (s: PlaybackState): void => {
+      const next = selRef.current(s);
+      setValue((prev) => (Object.is(prev, next) ? prev : next));
+    };
+    playback.on("state", on);
+    on(playback.getState());
+    return () => {
+      playback.off("state", on);
+    };
+  }, [playback]);
+  return value;
+}
+
+/**
+ * Subscribe to the queue's completed-download count only. Progress ticks emit
+ * "update" several times a second, but setState with an unchanged number
+ * bails out, so subscribers re-render once per finished download, not per tick.
+ */
+export function useQueueDoneCount(queue: DownloadQueue): number {
+  const [count, setCount] = useState<number>(() => queue.doneCount);
+  useEffect(() => {
+    const onUpdate = (): void => setCount(queue.doneCount);
+    queue.on("update", onUpdate);
+    onUpdate();
+    return () => {
+      queue.off("update", onUpdate);
+    };
+  }, [queue]);
+  return count;
 }
 
 /** Subscribe to playback state (now-playing bar). */
