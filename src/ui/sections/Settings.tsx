@@ -2,14 +2,27 @@ import { useEffect, useState, type ReactNode } from "react";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { Box, Text, useInput } from "ink";
-import { Select } from "@inkjs/ui";
-import { useStore } from "../store";
+import { Select, Spinner } from "@inkjs/ui";
+import { useQueueItems, useStore } from "../store";
 import { TextField } from "../components/TextField";
 import { Header } from "../components/Header";
 import { openPath } from "../../util/open-path";
 import { wrapStep } from "../move";
-import { displayPath, truncate } from "../../util/format";
+import {
+  displayPath,
+  expandTilde,
+  formatBytes,
+  truncate,
+} from "../../util/format";
 import { persistableHandle } from "../../sources/persist-handle";
+import {
+  moveLibraryDir,
+  retargetTracks,
+  samePath,
+  validateMoveRoots,
+  type MoveProgress,
+} from "../../library/move-library";
+import { defaultLibraryDir } from "../../config/paths";
 import { COLOR, ICON } from "../theme";
 
 type Mode =
@@ -17,14 +30,34 @@ type Mode =
   | "youtube"
   | "soundcloud"
   | "spotify"
+  | "folder"
+  | "folder-confirm"
+  | "moving"
   | "wipe-all";
 
+/** Key hints pinned under the page content (Download's FooterHint idiom). */
+function HintLine({ children }: { children: string }) {
+  return (
+    <Box marginTop={1}>
+      <Text dimColor wrap="truncate-end">
+        {children}
+      </Text>
+    </Box>
+  );
+}
+
 export function Settings() {
-  const { config, setConfig, library, queue, region, setCaptureMode } =
+  const { config, setConfig, library, queue, playback, region, setCaptureMode } =
     useStore();
   const focused = region === "content";
   const [mode, setMode] = useState<Mode>("menu");
   const [cursor, setCursor] = useState(0);
+  const [folderDraft, setFolderDraft] = useState("");
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [moveProgress, setMoveProgress] = useState<MoveProgress | null>(null);
+  const [moveNote, setMoveNote] = useState<string | null>(null);
+  // Keeps the confirm page's downloads-running gate live while it's open.
+  useQueueItems(queue);
 
   const entries: {
     value: Mode | "open-folder";
@@ -32,6 +65,8 @@ export function Settings() {
     detail: string;
     set?: boolean;
     danger?: boolean;
+    /** Blank line above: opens a new visual cluster (handles / folder / danger). */
+    gap?: boolean;
   }[] = [
     {
       value: "youtube",
@@ -59,6 +94,12 @@ export function Settings() {
       value: "open-folder",
       name: "Music folder",
       detail: displayPath(config.libraryDir),
+      gap: true,
+    },
+    {
+      value: "folder",
+      name: "Move music folder",
+      detail: "Change where songs live",
     },
     {
       value: "wipe-all",
@@ -78,6 +119,7 @@ export function Settings() {
         .then(() => openPath(config.libraryDir));
       return;
     }
+    if (v === "folder") setFolderError(null);
     setMode(v);
   }
 
@@ -95,10 +137,16 @@ export function Settings() {
   // Any sub-page (not the menu) owns esc while open, so esc backs up exactly
   // one level instead of jumping to the sidebar. Text sub-pages take the whole
   // keyboard; the wipe page only claims space + esc, so a stray space
-  // can't toggle the player mid-confirmation.
+  // can't toggle the player mid-confirmation. The moving page also claims the
+  // whole keyboard ("text"): quitting or firing a download mid-move would
+  // race the file shuffle, so only ctrl-c gets through.
   const inSubPage = focused && mode !== "menu";
   const isTextPage =
-    mode === "youtube" || mode === "soundcloud" || mode === "spotify";
+    mode === "youtube" ||
+    mode === "soundcloud" ||
+    mode === "spotify" ||
+    mode === "folder" ||
+    mode === "moving";
   useEffect(() => {
     setCaptureMode(!inSubPage ? "none" : isTextPage ? "text" : "picker");
     return () => setCaptureMode("none");
@@ -108,22 +156,18 @@ export function Settings() {
     (_input, key) => {
       if (key.escape) setMode("menu");
     },
-    { isActive: inSubPage },
+    { isActive: inSubPage && mode !== "moving" },
   );
 
-  // Every settings sub-page is rendered through frame(), so the back hint lives
-  // here once and stays identical across pages. esc always goes back one level.
-  function frame(title: string, node: ReactNode) {
+  // Every settings sub-page is rendered through frame(), so the hint line
+  // lives here once and matches Download's in-section footer language. esc
+  // always goes back one level.
+  function frame(title: string, node: ReactNode, hint = "esc Back") {
     return (
       <Box flexDirection="column">
         <Header title={title} focused={focused} />
         <Box>{node}</Box>
-        <Box marginTop={1}>
-          <Text>
-            <Text color={COLOR.alt}>esc</Text>
-            <Text dimColor> Back</Text>
-          </Text>
-        </Box>
+        <HintLine>{hint}</HintLine>
       </Box>
     );
   }
@@ -150,6 +194,7 @@ export function Settings() {
           />
         </Box>
       </Box>,
+      `↵ Save  ${ICON.dot}  esc Back`,
     );
   }
 
@@ -166,6 +211,86 @@ export function Settings() {
         setConfig({ ...config, [key]: handle });
       }
     });
+  }
+
+  function submitFolder(raw: string): void {
+    // Windows Explorer's "Copy as path" wraps the path in quotes; accept it.
+    let typed = raw.trim().replace(/^"(.+)"$/, "$1").trim();
+    if (!typed) {
+      setMode("menu");
+      return;
+    }
+    // A bare drive letter resolves to that drive's current directory, not
+    // its root; someone typing "D:" means the root.
+    if (/^[A-Za-z]:$/.test(typed)) typed += path.sep;
+    const current = path.resolve(config.libraryDir);
+    const next = path.resolve(expandTilde(typed));
+    if (samePath(current, next)) {
+      setMode("menu"); // typed the current folder back: nothing to do
+      return;
+    }
+    const invalid = validateMoveRoots(current, next);
+    if (invalid) {
+      setFolderError(invalid);
+      return;
+    }
+    // Creating the folder up front proves the path is real and writable
+    // before the confirm page promises a move.
+    void fs
+      .mkdir(next, { recursive: true })
+      .then(() => {
+        setFolderDraft(next);
+        setFolderError(null);
+        setMode("folder-confirm");
+      })
+      .catch(() => setFolderError("Can't create that folder"));
+  }
+
+  function runMove(): void {
+    const oldRoot = path.resolve(config.libraryDir);
+    const newRoot = folderDraft;
+    setMoveNote(null);
+    setMoveProgress(null);
+    setMode("moving");
+    void (async () => {
+      // Stop playback first: on Windows a folder rename fails while mpv
+      // holds a file inside it open.
+      await playback.stop();
+      // Point config at the new root BEFORE moving files: if the app dies
+      // mid-move, the next scan walks the new folder and relinks everything
+      // that already moved (by basename, then size), while unmoved tracks
+      // keep their still-valid old paths. Config-last would instead prune
+      // every moved track on a hard interrupt.
+      setConfig({ ...config, libraryDir: newRoot });
+      let note: string | null = null;
+      try {
+        let lastTick = 0;
+        const result = await moveLibraryDir(oldRoot, newRoot, {
+          onProgress: (p) => {
+            // Big libraries tick per file; ~10 updates a second is plenty.
+            const now = Date.now();
+            if (now - lastTick < 100 && p.movedFiles < p.totalFiles) return;
+            lastTick = now;
+            setMoveProgress(p);
+          },
+        });
+        if (result.failures.length) {
+          note = `Moved ${result.movedFiles} of ${result.totalFiles} files. The rest stayed in the old folder.`;
+        }
+      } catch {
+        note = "Move interrupted. The library heals itself on the next scan.";
+      }
+      try {
+        const changed = await retargetTracks(library.all(), oldRoot, newRoot);
+        if (changed.length) await library.upsertMany(changed);
+        library.flushSync();
+      } catch {
+        note ??= "Move interrupted. The library heals itself on the next scan.";
+      }
+      setMoveNote(note);
+      setMoveProgress(null);
+      setMode("menu");
+    })();
   }
 
   if (mode === "youtube") {
@@ -192,6 +317,101 @@ export function Settings() {
       "spotifyHandle",
       "Your Spotify handle",
       config.spotifyHandle,
+    );
+  }
+
+  if (mode === "folder") {
+    return frame(
+      "Move music folder",
+      <Box flexDirection="column">
+        <Box>
+          <Text color={COLOR.accent}>{`${ICON.pointer} `}</Text>
+          <TextField
+            isDisabled={!focused}
+            defaultValue={displayPath(config.libraryDir)}
+            placeholder={displayPath(defaultLibraryDir)}
+            onSubmit={submitFolder}
+          />
+        </Box>
+        {folderError && (
+          <Box marginTop={1}>
+            <Text color={COLOR.bad}>{folderError}</Text>
+          </Box>
+        )}
+      </Box>,
+      `↵ Continue  ${ICON.dot}  esc Back`,
+    );
+  }
+
+  if (mode === "folder-confirm") {
+    const busy = queue.activeCount > 0;
+    const tracks = library.all();
+    const size = formatBytes(
+      tracks.reduce((n, t) => n + (t.fileSize ?? 0), 0),
+    );
+    return frame(
+      "Move your music?",
+      <Box flexDirection="column">
+        {busy ? (
+          <Text color={COLOR.bad}>
+            Downloads are running. Wait for them to finish first.
+          </Text>
+        ) : (
+          <>
+            <Box marginBottom={1} flexDirection="column">
+              <Text dimColor>
+                {`${ICON.dot} ${tracks.length} song${
+                  tracks.length === 1 ? "" : "s"
+                }${size ? ` · ${size}` : ""}`}
+              </Text>
+              <Text dimColor>{`${ICON.dot} From ${displayPath(
+                config.libraryDir,
+              )}`}</Text>
+              <Text dimColor>{`${ICON.dot} To ${displayPath(folderDraft)}`}</Text>
+            </Box>
+            <Select
+              isDisabled={!focused}
+              options={[
+                { label: "‹ Cancel", value: "cancel" },
+                { label: "Move everything", value: "confirm" },
+              ]}
+              onChange={(v) => {
+                // A download may have started while the page sat open.
+                if (v !== "confirm" || queue.activeCount > 0) {
+                  setMode("menu");
+                  return;
+                }
+                runMove();
+              }}
+            />
+          </>
+        )}
+      </Box>,
+      busy
+        ? "esc Back"
+        : `↑↓ Move  ${ICON.dot}  ↵ Choose  ${ICON.dot}  esc Back`,
+    );
+  }
+
+  if (mode === "moving") {
+    // Not frame(): its "esc Back" hint would lie, there is no backing out
+    // of a move already writing files.
+    return (
+      <Box flexDirection="column">
+        <Header title="Moving music folder" focused={focused} />
+        <Box>
+          <Spinner
+            label={
+              moveProgress && moveProgress.totalFiles > 0
+                ? `Moving ${moveProgress.movedFiles}/${moveProgress.totalFiles} files…`
+                : "Preparing move…"
+            }
+          />
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor>Keep the app open until this finishes.</Text>
+        </Box>
+      </Box>
     );
   }
 
@@ -240,6 +460,7 @@ export function Settings() {
           }}
         />
       </Box>,
+      `↑↓ Move  ${ICON.dot}  ↵ Choose  ${ICON.dot}  esc Back`,
     );
   }
 
@@ -258,7 +479,7 @@ export function Settings() {
           const detailColor =
             it.danger ? COLOR.bad : it.set ? COLOR.alt : undefined;
           return (
-            <Box key={it.value} marginTop={it.danger ? 1 : 0}>
+            <Box key={it.value} marginTop={it.gap || it.danger ? 1 : 0}>
               <Text color={COLOR.accent}>
                 {active ? `${ICON.pointer} ` : "  "}
               </Text>
@@ -281,6 +502,12 @@ export function Settings() {
           );
         })}
       </Box>
+      {moveNote && (
+        <Box marginTop={1}>
+          <Text dimColor>{moveNote}</Text>
+        </Box>
+      )}
+      <HintLine>{`↑↓ Move  ${ICON.dot}  ↵ Choose`}</HintLine>
     </Box>
   );
 }

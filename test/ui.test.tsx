@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ReactNode } from "react";
 import { Box } from "ink";
 import { StoreContext, type Store } from "../src/ui/store";
@@ -408,6 +411,209 @@ describe("single-page sections render", () => {
     stdin.write("z"); // and back at the end after End
     await tick();
     expect(got.at(-1)).toBe("xabcz");
+  });
+
+  it("TextField collapses a multi-line bracketed paste to one line", async () => {
+    const got: string[] = [];
+    const { stdin } = render(<TextField onChange={(v) => got.push(v)} />);
+    await tick();
+    // A terminal paste arrives as one chunk: markers around raw newlines.
+    stdin.write(`${ESC}[200~alpha\r\nbeta\ngamma${ESC}[201~`);
+    await tick();
+    expect(got.at(-1)).toBe("alphabetagamma");
+  });
+
+  it("TextField jumps words on Ctrl+arrows", async () => {
+    const got: string[] = [];
+    const { stdin } = render(<TextField onChange={(v) => got.push(v)} />);
+    await tick();
+    stdin.write("one two");
+    await tick();
+    stdin.write(`${ESC}[1;5D`); // Ctrl+Left
+    await tick();
+    stdin.write("x"); // lands before "two" only if the word jump happened
+    await tick();
+    expect(got.at(-1)).toBe("one xtwo");
+  });
+
+  it("TextField forward-deletes on Delete", async () => {
+    const got: string[] = [];
+    const { stdin } = render(<TextField onChange={(v) => got.push(v)} />);
+    await tick();
+    stdin.write("abc");
+    await tick();
+    stdin.write(HOME);
+    await tick();
+    stdin.write(`${ESC}[3~`); // Delete key
+    await tick();
+    expect(got.at(-1)).toBe("bc");
+  });
+});
+
+describe("settings move music folder", () => {
+  const CTRL_U = "\u0015";
+
+  /** Menu order: youtube, soundcloud, spotify, open-folder, folder. */
+  async function openFolderPage(stdin: { write: (s: string) => void }) {
+    await tick();
+    for (let i = 0; i < 4; i++) {
+      stdin.write(DOWN);
+      await tick();
+    }
+    stdin.write("\r");
+    await tick();
+  }
+
+  it("shows the entry on the menu", () => {
+    const { lastFrame } = render(wrap(<Settings />, makeStore()));
+    expect(lastFrame() ?? "").toContain("Move music folder");
+  });
+
+  it("opens prefilled with the current folder", async () => {
+    const { stdin, lastFrame } = render(wrap(<Settings />, makeStore()));
+    await openFolderPage(stdin);
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Move music folder");
+    // defaultConfig.libraryDir collapses to a home-relative path.
+    expect(frame).toContain("~");
+    expect(frame).toContain("soundcli");
+  });
+
+  it("rejects a folder nested inside the current one (quoted paste ok)", async () => {
+    const { stdin, lastFrame } = render(wrap(<Settings />, makeStore()));
+    await openFolderPage(stdin);
+    stdin.write(CTRL_U); // clear the prefill
+    await tick();
+    // Quoted like Windows Explorer's "Copy as path"; the quotes must strip.
+    stdin.write('"~/Music/soundcli/inner"');
+    await tick();
+    stdin.write("\r");
+    await tick();
+    expect(lastFrame() ?? "").toContain("can't be inside");
+  });
+
+  it("blocks the move while downloads are running", async () => {
+    const busyQueue = asQueue(
+      new FakeQueue([
+        {
+          id: "q1",
+          source: "youtube",
+          sourceLabel: "YouTube",
+          track: { id: "t-q1", title: "Sample Song", downloadUrl: "x" },
+          status: "downloading",
+          percent: 10,
+        },
+      ]),
+    );
+    const target = path.join(
+      os.tmpdir(),
+      `sndcli-ui-move-${process.pid}-${Date.now()}`,
+    );
+    const { stdin, lastFrame } = render(
+      wrap(<Settings />, makeStore({ queue: busyQueue })),
+    );
+    try {
+      await openFolderPage(stdin);
+      stdin.write(CTRL_U);
+      await tick();
+      stdin.write(target);
+      await tick();
+      stdin.write("\r");
+      // The confirm page arrives after the async writability mkdir.
+      for (
+        let i = 0;
+        i < 40 && !(lastFrame() ?? "").includes("Move your music?");
+        i++
+      ) {
+        await tick();
+      }
+      const frame = lastFrame() ?? "";
+      expect(frame).toContain("Move your music?");
+      expect(frame).toContain("Downloads are running");
+      expect(frame).not.toContain("Move everything");
+    } finally {
+      await fs.rm(target, { recursive: true, force: true });
+    }
+  });
+
+  it("moves the files and retargets the library end to end", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "sndcli-ui-e2e-"));
+    const oldRoot = path.join(base, "old");
+    const newRoot = path.join(base, "new");
+    const oldFile = path.join(oldRoot, "SetA", "Song One.mp3");
+    await fs.mkdir(path.dirname(oldFile), { recursive: true });
+    await fs.writeFile(oldFile, "dummy-audio");
+    const track: Track = {
+      id: "local:900000001",
+      source: "local",
+      sourceTrackId: "900000001",
+      title: "Song One",
+      filePath: oldFile,
+      addedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const upserts: Track[][] = [];
+    const fakeLib = {
+      all: () => [track],
+      upsertMany: async (ts: Track[]) => {
+        upserts.push(ts);
+      },
+      flushSync: () => {},
+    } as unknown as Library;
+    let savedDir: string | null = null;
+    const store = makeStore({
+      config: { ...defaultConfig, libraryDir: oldRoot },
+      library: fakeLib,
+      queue: asQueue(new FakeQueue()),
+      setConfig: (c) => {
+        savedDir = c.libraryDir;
+      },
+    });
+    const { stdin, lastFrame } = render(wrap(<Settings />, store));
+    try {
+      await openFolderPage(stdin);
+      stdin.write(CTRL_U);
+      await tick();
+      stdin.write(newRoot);
+      await tick();
+      stdin.write("\r");
+      for (
+        let i = 0;
+        i < 40 && !(lastFrame() ?? "").includes("Move everything");
+        i++
+      ) {
+        await tick();
+      }
+      // The Select registers its input listener in a passive effect one task
+      // after its first frame; give it that task before driving it.
+      await tick();
+      stdin.write(DOWN); // ‹ Cancel → Move everything
+      await tick();
+      stdin.write("\r");
+      // The move runs async; wait for the menu (Wipe all only lives there).
+      for (
+        let i = 0;
+        i < 40 && !(lastFrame() ?? "").includes("Wipe all");
+        i++
+      ) {
+        await tick();
+      }
+      expect(lastFrame() ?? "").toContain("Wipe all");
+      // The file physically moved and the old root emptied away.
+      await expect(
+        fs.readFile(path.join(newRoot, "SetA", "Song One.mp3"), "utf8"),
+      ).resolves.toBe("dummy-audio");
+      await expect(fs.access(oldFile)).rejects.toThrow();
+      // Config repointed and the index retargeted to the new path.
+      expect(savedDir).toBe(path.resolve(newRoot));
+      expect(upserts).toHaveLength(1);
+      expect(upserts[0]![0]!.filePath).toBe(
+        path.join(path.resolve(newRoot), "SetA", "Song One.mp3"),
+      );
+      // A clean move leaves no partial-failure note behind.
+      expect(lastFrame() ?? "").not.toContain("stayed in the old folder");
+    } finally {
+      await fs.rm(base, { recursive: true, force: true });
+    }
   });
 });
 

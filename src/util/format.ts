@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 import stringWidth from "string-width";
 
 /**
@@ -258,4 +259,40 @@ export function formatBytesPerSec(bytes?: number): string {
     i++;
   }
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+/**
+ * Human-readable size, e.g. "4.7 GB". Returns "" for no/zero size so the
+ * caller can drop the segment cleanly (fresh downloads may lack a size until
+ * the next library scan stats them).
+ */
+export function formatBytes(bytes?: number): string {
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes <= 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+/**
+ * Expand a leading "~" to the home directory ("~", "~/x", or "~\x" on
+ * Windows only); anything else passes through untouched. The inverse of
+ * displayPath for user-typed paths. Pure string work, no disk IO.
+ */
+export function expandTilde(p: string, home = os.homedir()): string {
+  if (!home) return p;
+  if (p === "~") return home;
+  // "~\" is a home prefix only where displayPath emits it (Windows); on
+  // posix a backslash is a legal filename character, so "~\x" stays literal.
+  if (
+    p.startsWith("~/") ||
+    (process.platform === "win32" && p.startsWith("~\\"))
+  ) {
+    return path.join(home, p.slice(2));
+  }
+  return p;
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import stringWidth from "string-width";
-import { cleanText, truncate } from "../src/util/format";
+import { cleanText, formatBytes, truncate } from "../src/util/format";
 import { trackSignature } from "../src/library/drift";
 
 describe("cleanText renders titles 1:1", () => {
@@ -75,6 +75,24 @@ describe("truncate is code-point safe", () => {
     const t = truncate("ab🔥cd", 4);
     expect(t).toBe("ab🔥…");
     expect(t).not.toContain("�");
+  });
+});
+
+describe("formatBytes", () => {
+  it("walks the units with one decimal under 10", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(2048)).toBe("2.0 KB");
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+    expect(formatBytes(4.7 * 1024 ** 3)).toBe("4.7 GB");
+    expect(formatBytes(120 * 1024 ** 3)).toBe("120 GB");
+    expect(formatBytes(3 * 1024 ** 4)).toBe("3.0 TB");
+  });
+
+  it("returns empty for missing or zero sizes", () => {
+    expect(formatBytes(undefined)).toBe("");
+    expect(formatBytes(0)).toBe("");
+    expect(formatBytes(-5)).toBe("");
+    expect(formatBytes(Number.NaN)).toBe("");
   });
 });
 
