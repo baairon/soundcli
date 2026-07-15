@@ -49,36 +49,16 @@ type Row =
   | { kind: "action"; value: string; label: string; idx: number }
   | { kind: "item"; item: SongItem; idx: number; no: number };
 
-/** Section header row directly above `rowIndex`, if any. */
-function headerAbove(rows: Row[], rowIndex: number): number {
-  for (let i = rowIndex; i >= 0; i--) {
-    if (rows[i]?.kind === "header") return i;
-  }
-  return -1;
-}
-
 /**
- * Scroll offset that keeps the cursor on screen, centred when possible, and
- * pins the active section header into the window when both still fit (short
- * terminals otherwise centre past the header and it vanishes).
+ * Scroll offset that keeps the cursor on screen, centred when possible. Every
+ * list windows the same way regardless of section headers: the window shifts
+ * one row per cursor step, so a grouped list scrolls exactly like a flat one
+ * (a header simply scrolls off the top when the cursor moves past it).
  */
 function scrollStart(rows: Row[], cursorRow: number, height: number): number {
   if (cursorRow < 0 || rows.length === 0) return 0;
   const maxStart = Math.max(0, rows.length - height);
-  const preferred = Math.min(
-    Math.max(0, cursorRow - Math.floor(height / 2)),
-    maxStart,
-  );
-
-  const headerRow = headerAbove(rows, cursorRow);
-  if (headerRow < 0) return preferred;
-
-  const minStart = Math.max(0, cursorRow - height + 1);
-  const maxStartForHeader = Math.min(headerRow, maxStart);
-  if (minStart <= maxStartForHeader) {
-    return Math.max(minStart, Math.min(preferred, maxStartForHeader));
-  }
-  return Math.max(minStart, Math.min(preferred, maxStart));
+  return Math.min(Math.max(0, cursorRow - Math.floor(height / 2)), maxStart);
 }
 
 /**

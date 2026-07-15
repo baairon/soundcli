@@ -313,38 +313,35 @@ describe("single-page sections render", () => {
     expect(lines.length).toBeLessThanOrEqual(3);
   });
 
-  it("SongList keeps the active section header visible on short terminals", async () => {
+  it("SongList scrolls a grouped list per row, like a flat one (header scrolls off)", async () => {
+    // A titled group must window exactly like a flat list: the section header
+    // is not pinned, so once the cursor moves past it the header scrolls off
+    // the top one row at a time (no freeze-then-jump). height = listRows 4.
     const groups = [
       {
-        title: "SoundCloud · 2",
-        items: [
-          { value: "sc1", title: "SC One" },
-          { value: "sc2", title: "SC Two" },
-        ],
-      },
-      {
-        title: "Spotify · 3",
-        items: [
-          { value: "sp1", title: "Playlist - Solstice Arc" },
-          { value: "sp2", title: "Playlist - Marrow Fields" },
-          { value: "sp3", title: "My Mix - Vantablue" },
-        ],
+        title: "Src",
+        items: Array.from({ length: 10 }, (_, i) => ({
+          value: `r${i}`,
+          title: `Row${String(i).padStart(2, "0")}`,
+        })),
       },
     ];
     const { stdin, lastFrame } = render(
       wrap(
         <SongList groups={groups} focused reserveRows={0} onSelect={() => {}} />,
-        makeStore({ listRows: 3 }),
+        makeStore({ listRows: 4 }),
       ),
     );
     await tick();
-    for (let i = 0; i < 3; i++) {
+    // Two rows down (cursor on Row02): the window has advanced one row per
+    // step, so the header has scrolled off and the next row is now in view.
+    for (let i = 0; i < 2; i++) {
       stdin.write(DOWN);
       await tick();
     }
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("Spotify");
-    expect(frame).toContain("Marrow Fields");
+    expect(frame).not.toContain("Src"); // header no longer pinned on screen
+    expect(frame).toContain("Row03"); // window tracked the cursor smoothly
   });
 
   it("numbers item rows when `numbered` is set", () => {
