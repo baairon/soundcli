@@ -79,7 +79,8 @@ export class PlayHistory {
       { id, at: new Date().toISOString() },
       ...this.index.entries.filter((e) => e.id !== id),
     ].slice(0, CAP);
-    this.notify();
+    this.version++;
+    for (const fn of this.listeners) fn();
     void this.persist();
   }
 
@@ -88,7 +89,8 @@ export class PlayHistory {
     const kept = this.index.entries.filter((e) => existing(e.id));
     if (kept.length === this.index.entries.length) return;
     this.index.entries = kept;
-    this.notify();
+    this.version++;
+    for (const fn of this.listeners) fn();
     void this.persist();
   }
 

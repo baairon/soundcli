@@ -44,6 +44,8 @@ export class MpvPlayer extends EventEmitter {
    * after the last track, after stop), so transport commands are gated on this.
    */
   private loaded = false;
+  /** Lock to prevent connection reset while ensureStarted() is in progress. */
+  private resetting = false;
 
   constructor(mpvPath: string) {
     super();
@@ -73,6 +75,8 @@ export class MpvPlayer extends EventEmitter {
    * Used both on an unexpected exit (auto-respawn) and during teardown.
    */
   private resetConnection(): void {
+    if (this.resetting) return;
+    this.resetting = true;
     this.loaded = false;
     if (this.sock) {
       try {
@@ -91,6 +95,7 @@ export class MpvPlayer extends EventEmitter {
     this.unlinkSocket();
     // Each respawn gets a brand-new endpoint to avoid colliding with a stale one.
     this.ipcPath = MpvPlayer.makeIpcPath();
+    this.resetting = false;
   }
 
   /** Best-effort removal of the unix socket file (no-op on Windows pipes). */
