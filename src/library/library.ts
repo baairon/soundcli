@@ -89,7 +89,8 @@ export class Library {
 
   async upsert(track: Track): Promise<void> {
     this.index.tracks[track.id] = track;
-    this.notify();
+    this.version++;
+    this.sorted = null;
     this.schedulePersist();
   }
 
@@ -97,13 +98,15 @@ export class Library {
   async upsertMany(tracks: Track[]): Promise<void> {
     if (tracks.length === 0) return;
     for (const track of tracks) this.index.tracks[track.id] = track;
-    this.notify();
+    this.version++;
+    this.sorted = null;
     this.schedulePersist();
   }
 
   async remove(id: string): Promise<void> {
     delete this.index.tracks[id];
-    this.notify();
+    this.version++;
+    this.sorted = null;
     this.schedulePersist();
   }
 
@@ -111,13 +114,15 @@ export class Library {
   async removeMany(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     for (const id of ids) delete this.index.tracks[id];
-    this.notify();
+    this.version++;
+    this.sorted = null;
     this.schedulePersist();
   }
 
   async clear(): Promise<void> {
     this.index.tracks = {};
-    this.notify();
+    this.version++;
+    this.sorted = null;
     this.schedulePersist();
   }
 

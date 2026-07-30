@@ -84,7 +84,7 @@ export function clearSpotifyTokenCache(): void {
 /** Fetch (or reuse) an anonymous web-player bearer token. */
 export async function getWebPlayerToken(): Promise<WebPlayerToken> {
   const hit = tokenCache;
-  if (hit && hit.expiresAtMs - Date.now() > TOKEN_SKEW_MS) {
+  if (hit && hit.expiresAtMs > Date.now()) {
     return hit;
   }
 
