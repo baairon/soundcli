@@ -97,6 +97,23 @@ function youtubeWatchUrl(raw: string): string {
   return withProto;
 }
 
+/**
+ * YouTube `list=` params that begin with `RD` are auto-generated radio mixes
+ * that never end — yt-dlp would chase them forever, so those are stripped by
+ * {@link youtubeWatchUrl}. Anything else (`PL…`, `UU…`, `FL…`, `LL…`, `OL…`,
+ * …) is a real, finite playlist we can enumerate, and we return its id so the
+ * caller can rewrite a `watch?v=…&list=…` link into a proper collection URL.
+ */
+function youtubeRealPlaylistId(raw: string): string | undefined {
+  try {
+    const list = new URL(withProtocol(raw)).searchParams.get("list");
+    if (!list || /^RD/i.test(list)) return undefined;
+    return list;
+  } catch {
+    return undefined;
+  }
+}
+
 function pathSegments(path: string): string[] {
   return path.replace(/^\//, "").split(/[/?#]/).filter(Boolean);
 }
@@ -205,6 +222,19 @@ export function detectInput(raw: string): DetectResult {
 
   if (host === "youtube.com" || host === "music.youtube.com") {
     if (firstSegment === "watch" || path.includes("v=")) {
+      // A watch link can also carry a real (non-radio) playlist id. If so,
+      // treat it as a collection and point yt-dlp at the canonical playlist
+      // URL instead of the single video — otherwise the whole playlist is
+      // silently dropped and only the one video downloads.
+      const list = youtubeRealPlaylistId(s);
+      if (list) {
+        return {
+          ok: true,
+          source: "youtube",
+          kind: "collection",
+          value: `https://www.youtube.com/playlist?list=${list}`,
+        };
+      }
       return { ok: true, source: "youtube", kind: "track", value: youtubeWatchUrl(s) };
     }
     if (firstSegment === "shorts" && segments[1]) {
