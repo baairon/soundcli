@@ -912,7 +912,16 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     // The list is unfocused while the field is open: enter submits the rename
     // (unchanged title = noop) instead of also playing the cursor row.
     stdin.write("\r");
-    await tick();
+    // The submit path is async even for an unchanged title (renameTrack is
+    // awaited before the field closes), so one task is not always enough for
+    // the hint to come back on a slow machine; wait for it.
+    for (
+      let i = 0;
+      i < 40 && !(lastFrame() ?? "").includes("Press / to search…");
+      i++
+    ) {
+      await tick();
+    }
     expect(played).toEqual([]);
     expect(lastFrame() ?? "").toContain("Press / to search…");
   });
