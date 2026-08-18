@@ -1,8 +1,27 @@
 import path from "node:path";
 
-/** yt-dlp audio extraction args: always extract best-available, no re-encode. */
+/**
+ * yt-dlp audio extraction args. Every download lands as .m4a, with no setting
+ * to get that wrong: one folder that plays in the app, in Apple Music, and on
+ * a phone beats a faster download nobody can open.
+ *
+ * Nothing is ever re-encoded. The selector does all the real work, because
+ * every source we pull from already serves AAC alongside its default: YouTube
+ * offers it next to Opus, Spotify resolves through YouTube, and SoundCloud
+ * offers it next to mp3. Asking for that stream is selection, not conversion.
+ *
+ * --audio-format is the guard rail behind it, not a transcoder. On all three
+ * sources yt-dlp reports "already in target format" and passes the file
+ * through untouched; it would only convert for some future source that serves
+ * no AAC at all, and it is there so such a source cannot quietly put Opus
+ * back in the library.
+ *
+ * Bare `-x` used to be the whole function: it took whatever yt-dlp ranked
+ * best, which on YouTube is Opus, and left libraries full of files Apple
+ * Music refuses.
+ */
 export function audioFormatArgs(): string[] {
-  return ["-x"];
+  return ["-f", "bestaudio[ext=m4a]/bestaudio", "-x", "--audio-format", "m4a"];
 }
 
 /**

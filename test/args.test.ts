@@ -1,6 +1,29 @@
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { outputTemplateInFolder } from "../src/ytdlp/args";
+import { audioFormatArgs, outputTemplateInFolder } from "../src/ytdlp/args";
+import { AUDIO_EXTS } from "../src/library/drift";
+
+describe("audioFormatArgs", () => {
+  it("asks for the source's own AAC stream before falling back to converting", () => {
+    const args = audioFormatArgs();
+    // The selector has to come first: every source we pull from serves AAC
+    // natively, so this is what makes --audio-format find nothing to convert.
+    expect(args.slice(0, 2)).toEqual(["-f", "bestaudio[ext=m4a]/bestaudio"]);
+    expect(args).toContain("-x");
+    // The guard rail behind it: a future source serving no AAC still cannot
+    // put a file the rest of the world refuses to open back in the library.
+    expect(args.slice(-2)).toEqual(["--audio-format", "m4a"]);
+  });
+
+  it("never asks for a format the library walk would not recognize", () => {
+    // A drift guard, not a restatement: the walk only sees extensions listed
+    // in AUDIO_EXTS, so a format changed here without being added there would
+    // download fine and then fail with "the file is missing on disk".
+    const args = audioFormatArgs();
+    const ext = args[args.indexOf("--audio-format") + 1];
+    expect(AUDIO_EXTS.has(`.${ext}`)).toBe(true);
+  });
+});
 
 describe("outputTemplateInFolder", () => {
   it("places yt-dlp's filename inside the given folder without owner", () => {
