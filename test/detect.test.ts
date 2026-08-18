@@ -75,6 +75,39 @@ describe("detectInput", () => {
     });
   });
 
+  it("treats a watch link with a real playlist id as a collection", () => {
+    // A watch URL carrying a non-RD list= is a real, finite playlist: rewrite
+    // it to the canonical playlist URL so the whole thing enumerates.
+    expect(
+      detectInput(
+        "https://www.youtube.com/watch?v=B2XkzZR4R0U&list=PLaJ9Nwvg45rU",
+      ),
+    ).toEqual({
+      ok: true,
+      source: "youtube",
+      kind: "collection",
+      value: "https://www.youtube.com/playlist?list=PLaJ9Nwvg45rU",
+    });
+    // Works without a protocol and on music.youtube.com too.
+    expect(
+      detectInput("youtube.com/watch?v=abc&list=PLxyz"),
+    ).toEqual({
+      ok: true,
+      source: "youtube",
+      kind: "collection",
+      value: "https://www.youtube.com/playlist?list=PLxyz",
+    });
+    // An empty or RD-prefixed list is not a real playlist: falls back to track.
+    expect(
+      detectInput("https://www.youtube.com/watch?v=abc&list="),
+    ).toEqual({
+      ok: true,
+      source: "youtube",
+      kind: "track",
+      value: "https://www.youtube.com/watch?v=abc",
+    });
+  });
+
   it("detects YouTube playlist links as collections", () => {
     expect(detectInput("https://youtube.com/playlist?list=PLxyz")).toEqual({
       ok: true,
