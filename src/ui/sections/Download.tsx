@@ -29,7 +29,9 @@ import {
 import { fuzzyFilter } from "../../util/fuzzy";
 import {
   BOT_GATE,
+  SOURCE_BLOCKING,
   TOO_MANY_FAILURES,
+  TRACKS_MISSING,
   WAITING_FOR_TOOLS,
   type QueueItem,
 } from "../../download/queue";
@@ -178,27 +180,27 @@ const MARK_COLOR: Partial<Record<QueueItem["status"], string>> = {
 };
 
 /**
+ * Why the queue parked, named. These ask different things of the user, and one
+ * umbrella label ("rate limited") for all of them is worse than useless: it
+ * describes a cause that often isn't happening and sends people to look at
+ * their connection when the real answer is elsewhere. One short clause each:
+ * the banner is one line and the user is mid-download.
+ */
+function pausedReason(reason: string): string {
+  if (reason === WAITING_FOR_TOOLS) return "Waiting on ffmpeg";
+  if (reason === BOT_GATE) return "Bot check, wait a while";
+  if (reason === SOURCE_BLOCKING) return "Source keeps refusing downloads, on hold";
+  if (reason === TRACKS_MISSING) return "Too many missing tracks, on hold";
+  if (reason === TOO_MANY_FAILURES) return "Too many failures in a row, on hold";
+  return "Rate-limited, wait a while";
+}
+
+/**
  * A calm, human reason for the row's right edge. Raw tool output (exit codes,
  * stderr dumps) never reaches the screen: we bucket the few causes a user can
  * actually do something about and fall back to a generic phrase, since "f
  * Retry" is the answer to almost all of them anyway.
  */
-/**
- * Why the queue parked, named. These ask different things of the user, and one
- * umbrella label ("rate limited") for all of them is worse than useless: it
- * describes a cause that often isn't happening and sends people to look at
- * their connection when the real answer is elsewhere.
- */
-function pausedReason(reason: string): string {
-  if (reason === WAITING_FOR_TOOLS)
-    return "Waiting for the audio engine (install ffmpeg if this persists)";
-  if (reason === BOT_GATE)
-    return "The source wants to check you're not a bot, wait a while";
-  if (reason === TOO_MANY_FAILURES)
-    return "Too many downloads failed in a row, so the rest are on hold";
-  return "Rate-limited, wait a while";
-}
-
 function shortError(e?: string): string {
   if (!e) return "couldn't save";
   const m = e.toLowerCase();
@@ -400,20 +402,48 @@ function QueueView() {
   }
 
   const active = s.downloading > 0 || s.pending > 0;
+  // "All done" means nothing failed; "Done" means read the counts next to it.
+  // It used to say "some failed", which turned into a joke on a batch where
+  // every single track failed.
   const title = active
     ? "Downloading"
     : s.paused
       ? "Paused"
       : s.failed
-        ? "Done, some failed"
+        ? "Done"
         : s.canceled > 0 && s.done + s.skipped === 0
           ? "Canceled"
           : "All done";
   const saved = s.done + s.skipped;
-  const batchBreakdown =
-    s.inputTotal > s.total || s.alreadySaved > 0
-      ? `${s.inputTotal.toLocaleString()} tracks  ${ICON.dot}  ${s.alreadySaved.toLocaleString()} already saved  ${ICON.dot}  ${s.newTracks.toLocaleString()} new`
-      : `${saved.toLocaleString()} of ${s.total.toLocaleString()} saved`;
+  // One segment per number that says something. A zero-valued chunk is noise,
+  // and the raw input total only ever differed from `total` by in-batch
+  // duplicates it never explained on screen. The saved count always leads, so
+  // the outcome is stated instead of left as arithmetic for the reader.
+  const counts: { text: string; color?: string; dim: boolean }[] = [
+    {
+      text: `${saved.toLocaleString()} of ${s.total.toLocaleString()} saved`,
+      dim: true,
+    },
+  ];
+  if (s.alreadySaved > 0)
+    counts.push({
+      text: `${s.alreadySaved.toLocaleString()} already saved`,
+      dim: true,
+    });
+  if (s.paused > 0)
+    counts.push({
+      text: `${s.paused.toLocaleString()} paused`,
+      color: COLOR.warn,
+      dim: false,
+    });
+  if (s.failed > 0)
+    counts.push({
+      text: `${s.failed.toLocaleString()} failed`,
+      color: COLOR.bad,
+      dim: true,
+    });
+  if (s.canceled > 0)
+    counts.push({ text: `${s.canceled.toLocaleString()} canceled`, dim: true });
 
   // Only surface commands that would actually do something right now, so the
   // footer stays a short contextual hint instead of a wall of every key. Nav
@@ -431,7 +461,12 @@ function QueueView() {
       {s.rateLimited ? (
         <Box marginBottom={1}>
           <Text color={COLOR.warn} wrap="truncate-end">
-            {`${ICON.warn} ${pausedReason(s.rateLimitReason)}  ${ICON.dot}  ] resumes`}
+            {`${ICON.warn} ${pausedReason(s.rateLimitReason)}${
+              // ] only resumes rows the halt actually parked. After a cancel
+              // there is nothing to resume, and promising the key there
+              // contradicts the command row three lines below.
+              s.paused > 0 ? `  ${ICON.dot}  ] resumes` : ""
+            }`}
           </Text>
         </Box>
       ) : s.failingSource ? (
@@ -439,7 +474,7 @@ function QueueView() {
         // means the downloader broke, not the tracks; say so once, calmly.
         <Box marginBottom={1}>
           <Text color={COLOR.warn} wrap="truncate-end">
-            {`${ICON.warn} ${s.failingSource} downloads keep failing  ${ICON.dot}  the downloader may be out of date  ${ICON.dot}  restart soundcli to update it`}
+            {`${ICON.warn} ${s.failingSource} keeps failing  ${ICON.dot}  restart soundcli to update the downloader`}
           </Text>
         </Box>
       ) : null}
@@ -461,20 +496,14 @@ function QueueView() {
           <Text bold color={focused ? COLOR.accent : undefined}>
             {title}
           </Text>
-          <Text dimColor>
-            {`  ${ICON.dot}  ${batchBreakdown}`}
-          </Text>
-          {s.paused ? (
-            <Text color={COLOR.warn}>{`  ${ICON.dot}  ${s.paused.toLocaleString()} paused`}</Text>
-          ) : null}
-          {s.failed ? (
-            <Text color={COLOR.bad} dimColor>
-              {`  ${ICON.dot}  ${s.failed} failed`}
+          {counts.map((c) => (
+            <Text key={c.text}>
+              <Text dimColor>{`  ${ICON.dot}  `}</Text>
+              <Text color={c.color} dimColor={c.dim}>
+                {c.text}
+              </Text>
             </Text>
-          ) : null}
-          {s.canceled ? (
-            <Text dimColor>{`  ${ICON.dot}  ${s.canceled} canceled`}</Text>
-          ) : null}
+          ))}
         </Text>
       </Box>
 

@@ -657,8 +657,65 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     });
     const { lastFrame } = render(wrap(<Download />, store));
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("SoundCloud downloads keep failing");
-    expect(frame).toContain("downloader may be out of date");
+    expect(frame).toContain("SoundCloud keeps failing");
+    expect(frame).toContain("restart soundcli to update the downloader");
+  });
+
+  it("the summary states the outcome and drops empty counts", () => {
+    // The batch that prompted this: nothing saved, a few failures, the rest
+    // canceled. The old line printed "0 already saved", printed an input total
+    // nothing on screen explained, and never said how many actually landed.
+    const canceledItem = (id: string): QueueItem => ({
+      id,
+      source: "soundcloud",
+      sourceLabel: "SoundCloud",
+      track: { id: `t-${id}`, title: `Track ${id}`, downloadUrl: "x" },
+      status: "canceled",
+      percent: 0,
+    });
+    const items: QueueItem[] = [
+      ...Array.from({ length: 7 }, (_, i) => errorItem(`e${i}`, `Track ${i}`)),
+      ...Array.from({ length: 100 }, (_, i) => canceledItem(`c${i}`)),
+    ];
+    const store = makeStore({ queue: asQueue(new FakeQueue(items)) });
+    const { lastFrame } = render(wrap(<Download />, store));
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("0 of 107 saved");
+    expect(frame).toContain("7 failed");
+    expect(frame).toContain("100 canceled");
+    // No zero-valued chunk, and no "some failed" on a batch where all of them did.
+    expect(frame).not.toContain("already saved");
+    expect(frame).not.toContain("some failed");
+  });
+
+  it("offers ] only while the halt still has rows parked", () => {
+    const row = (id: string, status: QueueItem["status"]): QueueItem => ({
+      id,
+      source: "soundcloud",
+      sourceLabel: "SoundCloud",
+      track: { id: `t-${id}`, title: "Track One", downloadUrl: "x" },
+      status,
+      percent: 0,
+    });
+    const parked = render(
+      wrap(
+        <Download />,
+        makeStore({ queue: asQueue(new FakeQueue([row("p1", "paused")], true)) }),
+      ),
+    );
+    expect(parked.lastFrame() ?? "").toContain("] resumes");
+
+    // Cancelling leaves the flag set with nothing to resume, so the hint must
+    // go: ] is a no-op there and the command row already says Retry / Done.
+    const canceled = render(
+      wrap(
+        <Download />,
+        makeStore({ queue: asQueue(new FakeQueue([row("c1", "canceled")], true)) }),
+      ),
+    );
+    const frame = canceled.lastFrame() ?? "";
+    expect(frame).toContain("Rate-limited");
+    expect(frame).not.toContain("] resumes");
   });
 
   it("help overlay keeps every key and label on a single line", () => {

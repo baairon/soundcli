@@ -118,6 +118,13 @@ function failureStreakLimit(): number {
 }
 
 /**
+ * Smallest sample the ETA will extrapolate from, counted in tracks. Below this
+ * a barely-started download turns a two-second elapsed into an hours-long
+ * guess, so we keep saying "estimating…" for another moment instead.
+ */
+const ETA_MIN_SAMPLE = 0.15;
+
+/**
  * Permanent failures in a row from one source before we hint that the
  * downloader itself may be stale. Genuinely dead tracks arrive scattered
  * through a playlist; a broken extractor 404s everything at once.
@@ -142,6 +149,8 @@ export const WAITING_FOR_TOOLS = "waiting for tools";
 export const RATE_LIMITED = "rate limited";
 export const BOT_GATE = "bot gate";
 export const TOO_MANY_FAILURES = "too many failures";
+export const SOURCE_BLOCKING = "source blocking";
+export const TRACKS_MISSING = "tracks missing";
 
 /**
  * Whether a failure is the track's fault rather than the platform's mood:
@@ -172,6 +181,18 @@ export function isPermanentTrackError(text: string): boolean {
 }
 
 /**
+ * Which halt a streak earned, named after the failure that tripped it. Every
+ * kind of failure counts toward the streak (a batch where nothing works is not
+ * worth grinding through), but they are genuinely different situations, so the
+ * banner says which one instead of blaming a rate limit for all three.
+ */
+function streakReason(error: string): string {
+  if (isSourceBlockedError(error)) return SOURCE_BLOCKING;
+  if (isPermanentTrackError(error)) return TRACKS_MISSING;
+  return TOO_MANY_FAILURES;
+}
+
+/**
  * Concurrent download queue. Emits "update" on any change. Skips tracks already
  * in the library or already queued (no song downloads twice), records finished
  * downloads in the library, and supports instant cancel (kills yt-dlp).
@@ -196,8 +217,8 @@ export class DownloadQueue extends EventEmitter {
   private rateLimitReason = "";
   /** Wall-clock start of the current run window (null while idle), for the ETA. */
   private runStartedAt: number | null = null;
-  /** `done` count when the current run window began, so the ETA rate is per-run. */
-  private runDoneBaseline = 0;
+  /** `finished` count when the run window began, so the ETA rate is per-run. */
+  private runFinishedBaseline = 0;
   /** Hard failures in a row; trips the auto-pause circuit breaker. */
   private consecutiveErrors = 0;
   /** Consecutive permanent (dead-track) failures, per source label. */
@@ -307,20 +328,24 @@ export class DownloadQueue extends EventEmitter {
       rateLimitReason: this.rateLimitReason,
       failingSource: this.failingSource,
       overallPercent: total ? Math.round((finished / total) * 100) : 0,
-      etaSeconds: this.estimateEta(done, downloading, pending),
+      etaSeconds: this.estimateEta(finished, downloading, pending),
     };
   }
 
   /**
    * Whole-batch ETA. Pending tracks have unknown size, so we estimate from
-   * throughput: how long completed downloads took per track times the work left
-   * (counting in-flight items by their remaining fraction). This self-corrects
-   * as the run proceeds and already bakes in the parallelism. Before the first
-   * track finishes we fall back to the slowest in-flight yt-dlp eta when nothing
-   * is still pending; otherwise it stays undefined ("estimating…").
+   * throughput: how fast the queue drains times the work left (counting
+   * in-flight items by their remaining fraction). This self-corrects as the run
+   * proceeds and already bakes in the parallelism.
+   *
+   * Every finished track feeds the rate, failures included: a track that failed
+   * still spent wall-clock time, and sampling successes alone left a batch that
+   * fails everything sitting at "estimating…" forever. In-flight percent counts
+   * as a partial sample too, so a number appears seconds into the first
+   * download instead of only after it lands.
    */
   private estimateEta(
-    done: number,
+    finished: number,
     downloading: number,
     pending: number,
   ): number | undefined {
@@ -328,20 +353,19 @@ export class DownloadQueue extends EventEmitter {
     if (remaining === 0) return undefined;
 
     if (this.runStartedAt !== null) {
-      const completedThisRun = done - this.runDoneBaseline;
+      let inFlight = 0;
+      for (const i of this.items) {
+        if (i.status === "downloading") inFlight += i.percent / 100;
+      }
+      const completedThisRun = finished - this.runFinishedBaseline + inFlight;
       const elapsedSec = (Date.now() - this.runStartedAt) / 1000;
-      if (completedThisRun > 0 && elapsedSec > 0) {
+      if (completedThisRun >= ETA_MIN_SAMPLE && elapsedSec > 0) {
         const perTrack = elapsedSec / completedThisRun;
-        let remainingTracks = pending;
-        for (const i of this.items) {
-          if (i.status === "downloading")
-            remainingTracks += (100 - i.percent) / 100;
-        }
-        return perTrack * remainingTracks;
+        return perTrack * (pending + (downloading - inFlight));
       }
     }
 
-    // No completed-track sample yet: only the in-flight batch is estimable.
+    // No usable sample yet: only the in-flight batch is estimable.
     if (pending === 0 && downloading > 0) {
       const etas = this.items
         .filter((i) => i.status === "downloading" && i.eta !== undefined)
@@ -417,8 +441,7 @@ export class DownloadQueue extends EventEmitter {
     this.batchNewTracks = 0;
     if (this.runStartedAt !== null) {
       this.runStartedAt = Date.now();
-      const st = this.stats();
-      this.runDoneBaseline = st.done;
+      this.runFinishedBaseline = this.stats().finished;
     }
     this.emit("update");
     this.scheduleSave();
@@ -1002,9 +1025,10 @@ export class DownloadQueue extends EventEmitter {
     // Open a fresh ETA run window the moment work resumes from idle.
     if (this.runStartedAt === null) {
       this.runStartedAt = Date.now();
-      this.runDoneBaseline = this.items.filter(
-        (i) => i.status === "done",
-      ).length;
+      // Same measure as the numerator: finished rows fold into the cleared
+      // counters almost immediately, so counting live items here left the
+      // baseline at zero while the numerator kept climbing.
+      this.runFinishedBaseline = this.stats().finished;
     }
     this.active++;
     item.status = "downloading";
@@ -1168,26 +1192,25 @@ export class DownloadQueue extends EventEmitter {
       item.status = "error";
       item.error = e instanceof Error ? e.message : String(e);
       this.logFailure(item, item.error);
-      // A run of TRANSIENT failures may mean we're being throttled or blocked,
-      // so pause the whole queue (resumable) instead of failing the rest
-      // silently. Permanently dead tracks say nothing about the platform, so
-      // they neither count toward nor reset the streak; they feed their own
-      // per-source streak instead, which raises the stale-downloader notice
-      // without ever pausing.
+      // A run of failures of any kind means the rest of the batch is very
+      // likely to fail the same way, so pause the whole queue (resumable)
+      // rather than burn through hundreds of rows: that is what the user would
+      // do by hand, several minutes later. The kind of failure picks which
+      // banner shows rather than deciding whether to stop, which is what keeps
+      // this honest; an earlier version excluded 403s and dead tracks
+      // precisely because stopping under a "rate limited" banner was a lie.
       //
-      // Source-blocked (403) tracks are excluded too. They cluster (a playlist
-      // heavy with official label uploads hits several in a row), so counting
-      // them tripped this breaker and announced a rate limit that was never
-      // happening. They still fail their own rows, honestly labelled.
+      // A single success resets the streak, so tracks that are individually
+      // dead, scattered through a playlist, never park the queue.
+      this.consecutiveErrors++;
+      if (this.consecutiveErrors >= failureStreakLimit() && !this.rateLimited) {
+        this.onRateLimited(streakReason(item.error));
+      }
       if (
-        !isPermanentTrackError(item.error) &&
-        !isSourceBlockedError(item.error)
+        isPermanentTrackError(item.error) &&
+        !isSourceBlockedError(item.error) &&
+        !/drm/i.test(item.error)
       ) {
-        this.consecutiveErrors++;
-        if (this.consecutiveErrors >= failureStreakLimit() && !this.rateLimited) {
-          this.onRateLimited(TOO_MANY_FAILURES);
-        }
-      } else if (!isSourceBlockedError(item.error) && !/drm/i.test(item.error)) {
         // DRM is the platform telling the truth about the track, not a sign
         // of a stale extractor, so it never feeds the out-of-date hint.
         this.notePermanentFailure(item.sourceLabel);

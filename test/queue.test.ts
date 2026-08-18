@@ -35,6 +35,8 @@ import { downloadTrack, enumerate } from "../src/ytdlp/ytdlp";
 import {
   DownloadQueue,
   isPermanentTrackError,
+  SOURCE_BLOCKING,
+  TRACKS_MISSING,
   WAITING_FOR_TOOLS,
 } from "../src/download/queue";
 import { defaultConfig } from "../src/config/config";
@@ -663,12 +665,13 @@ describe("download queue per-track retry", () => {
     expect(s.failed).toBe(5); // every item was attempted after the resume
   });
 
-  it("never pauses for a run of source-blocked (403) tracks", async () => {
+  it("parks the queue on a run of source-blocked (403) tracks", async () => {
     // 403s cluster: a playlist heavy with official label uploads hits several
     // in a row, because those are served only to clients that can prove where
-    // the request came from. Counting them toward the breaker paused the whole
-    // queue and announced a rate limit that was never happening, which is the
-    // wrong answer to a per-track problem. Every row still fails honestly.
+    // the request came from. The rest of the batch then fails the same way, so
+    // grinding through it only wastes the user's evening before they cancel by
+    // hand. Counting these toward the breaker was fine; announcing them as a
+    // rate limit was the lie, so the halt names this one for what it is.
     process.env.SOUNDCLI_FAILURE_STREAK = "3";
     vi.mocked(downloadTrack).mockRejectedValue(
       new Error(
@@ -685,10 +688,11 @@ describe("download queue per-track retry", () => {
     ]);
     await new Promise((r) => setTimeout(r, 250));
     const s = q.stats();
-    expect(s.rateLimited).toBe(false);
-    // Nothing is left parked: the queue worked through the whole batch.
-    expect(s.paused).toBe(0);
-    expect(s.failed).toBe(5);
+    expect(s.rateLimited).toBe(true);
+    expect(s.rateLimitReason).toBe(SOURCE_BLOCKING);
+    expect(s.failed).toBe(3);
+    // The rest wait as paused rows the user can resume, not as failures.
+    expect(s.paused).toBe(2);
   });
 
   it("classifies permanent track errors vs transient platform errors", () => {
@@ -702,7 +706,7 @@ describe("download queue per-track retry", () => {
     expect(isPermanentTrackError("read timed out")).toBe(false);
   });
 
-  it("permanent failures (dead tracks) never trip the breaker", async () => {
+  it("parks the queue on a run of dead tracks, under its own banner", async () => {
     process.env.SOUNDCLI_FAILURE_STREAK = "3";
     vi.mocked(downloadTrack).mockRejectedValue(
       new Error("ERROR: This track is unavailable"),
@@ -715,12 +719,79 @@ describe("download queue per-track retry", () => {
       input("youtube", "d"),
     ]);
     await new Promise((r) => setTimeout(r, 120));
-    // Every item fails individually; the queue never assumes throttling.
-    expect(q.stats().rateLimited).toBe(false);
-    expect(q.stats().failed).toBe(4);
-    expect(q.stats().paused).toBe(0);
-    // Dead tracks also skip the per-track retries: one attempt each.
-    expect(vi.mocked(downloadTrack).mock.calls.length).toBe(4);
+    const s = q.stats();
+    // Never "rate limited": this halt says what it actually saw.
+    expect(s.rateLimited).toBe(true);
+    expect(s.rateLimitReason).toBe(TRACKS_MISSING);
+    expect(s.failed).toBe(3);
+    expect(s.paused).toBe(1);
+    // Dead tracks still skip the per-track retries: one attempt each.
+    expect(vi.mocked(downloadTrack).mock.calls.length).toBe(3);
+  });
+
+  it("keeps going when successes break up the failures", async () => {
+    // The case the breaker must never touch: tracks that are individually dead,
+    // scattered through an otherwise healthy playlist. One success resets the
+    // streak, so three failures spread across five tracks park nothing.
+    process.env.SOUNDCLI_FAILURE_STREAK = "3";
+    let calls = 0;
+    vi.mocked(downloadTrack).mockImplementation(async () => {
+      calls++;
+      if (calls === 3)
+        return { status: "downloaded", meta: { id: "c", title: "C", filepath: "/x" } };
+      throw new Error("ERROR: This track is unavailable");
+    });
+    const lib = {
+      has: () => false,
+      all: () => [],
+      upsert: vi.fn(async () => {}),
+    } as unknown as Library;
+    const q = new DownloadQueue(defaultConfig, lib, 1);
+    q.enqueue([
+      input("youtube", "a"),
+      input("youtube", "b"),
+      input("youtube", "c"),
+      input("youtube", "d"),
+      input("youtube", "e"),
+    ]);
+    await new Promise((r) => setTimeout(r, 150));
+    const s = q.stats();
+    expect(s.rateLimited).toBe(false);
+    expect(s.paused).toBe(0);
+    expect(s.failed).toBe(4);
+    expect(s.done).toBe(1);
+  });
+
+  it("estimates a finish time from failures, not only from downloads", async () => {
+    // Sampling successes alone left a batch that fails everything sitting at
+    // "estimating…" until the user gave up: a failed track still spends
+    // wall-clock time, so it tells us just as much about the drain rate.
+    process.env.SOUNDCLI_FAILURE_STREAK = "99";
+    vi.mocked(downloadTrack).mockImplementation(
+      () =>
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("ERROR: This track is unavailable")), 30),
+        ),
+    );
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    q.enqueue([
+      input("youtube", "a"),
+      input("youtube", "b"),
+      input("youtube", "c"),
+      input("youtube", "d"),
+      input("youtube", "e"),
+    ]);
+    await new Promise((r) => setTimeout(r, 45));
+    const s = q.stats();
+    // Sampled mid-run: something has failed and work is still queued.
+    expect(s.failed).toBeGreaterThan(0);
+    expect(s.downloading + s.pending).toBeGreaterThan(0);
+    expect(s.etaSeconds).toBeDefined();
+    expect(s.etaSeconds).toBeGreaterThan(0);
+    // Sampled mid-flight on purpose, so stop the queue before the test ends:
+    // a queue left pumping keeps calling the shared mock during later tests.
+    q.cancelAll();
+    await new Promise((r) => setTimeout(r, 40));
   });
 
   it("skips an item already in the library without downloading it", async () => {
