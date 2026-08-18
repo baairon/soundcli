@@ -612,7 +612,11 @@ describe("download queue per-track retry", () => {
 
   it("auto-pauses the whole queue after a streak of failures", async () => {
     process.env.SOUNDCLI_FAILURE_STREAK = "3";
-    vi.mocked(downloadTrack).mockRejectedValue(new Error("HTTP Error 403"));
+    vi.mocked(downloadTrack).mockRejectedValue(
+      new Error(
+        "yt-dlp failed (exit 1): ERROR: unable to download video data: The read operation timed out",
+      ),
+    );
     const q = new DownloadQueue(defaultConfig, fakeLib, 1);
     q.enqueue([
       input("youtube", "a"),
@@ -631,7 +635,11 @@ describe("download queue per-track retry", () => {
 
   it("stays paused after a throttle pause until the user resumes", async () => {
     process.env.SOUNDCLI_FAILURE_STREAK = "3";
-    vi.mocked(downloadTrack).mockRejectedValue(new Error("HTTP Error 403"));
+    vi.mocked(downloadTrack).mockRejectedValue(
+      new Error(
+        "yt-dlp failed (exit 1): ERROR: unable to download video data: The read operation timed out",
+      ),
+    );
     const q = new DownloadQueue(defaultConfig, fakeLib, 1);
     q.enqueue([
       input("youtube", "a"),
@@ -653,6 +661,34 @@ describe("download queue per-track retry", () => {
     const s = q.stats();
     expect(s.paused).toBe(0);
     expect(s.failed).toBe(5); // every item was attempted after the resume
+  });
+
+  it("never pauses for a run of source-blocked (403) tracks", async () => {
+    // 403s cluster: a playlist heavy with official label uploads hits several
+    // in a row, because those are served only to clients that can prove where
+    // the request came from. Counting them toward the breaker paused the whole
+    // queue and announced a rate limit that was never happening, which is the
+    // wrong answer to a per-track problem. Every row still fails honestly.
+    process.env.SOUNDCLI_FAILURE_STREAK = "3";
+    vi.mocked(downloadTrack).mockRejectedValue(
+      new Error(
+        "yt-dlp failed (exit 1): ERROR: unable to download video data: HTTP Error 403: Forbidden",
+      ),
+    );
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    q.enqueue([
+      input("youtube", "a"),
+      input("youtube", "b"),
+      input("youtube", "c"),
+      input("youtube", "d"),
+      input("youtube", "e"),
+    ]);
+    await new Promise((r) => setTimeout(r, 250));
+    const s = q.stats();
+    expect(s.rateLimited).toBe(false);
+    // Nothing is left parked: the queue worked through the whole batch.
+    expect(s.paused).toBe(0);
+    expect(s.failed).toBe(5);
   });
 
   it("classifies permanent track errors vs transient platform errors", () => {

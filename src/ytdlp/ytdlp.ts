@@ -157,17 +157,41 @@ export interface DownloadParams {
   signal?: AbortSignal;
 }
 
+/** Why the whole queue parked, so the banner can say which rather than guess. */
+export type StopReason = "ratelimited" | "botgate";
+
 export interface DownloadResult {
   status: "downloaded" | "already" | "canceled" | "ratelimited";
   meta?: TrackMeta;
+  /** Set with status "ratelimited". */
+  reason?: StopReason;
 }
 
-/** Whether an error looks like the platform rate-limiting / bot-gating us. */
+/**
+ * Whether an error is the platform holding the whole connection back, rather
+ * than one track being unplayable. Throttling and the bot gate both land here:
+ * they are about this machine, not this song, so marching on would just fail
+ * every remaining track in turn.
+ *
+ * The age gate is deliberately excluded. "Sign in to confirm your age" reads
+ * almost identically to "Sign in to confirm you're not a bot", and matching
+ * both on "sign in to confirm" meant one age-restricted video stopped every
+ * other download in the playlist and reported itself as throttling. Age
+ * restriction is a permanent property of a single video, so it fails its own
+ * row and the queue keeps going (see isPermanentTrackError).
+ */
 export function isRateLimitError(text: string): boolean {
-  return /HTTP Error 429|Too Many Requests|rate.?limit|sign in to confirm|not a bot|temporarily blocked/i.test(
-    text,
-  );
+  return stopReasonFor(text) !== null;
 }
+
+/** Which of the two it is, for a banner that names the cause. */
+export function stopReasonFor(text: string): StopReason | null {
+  if (/not a bot/i.test(text)) return "botgate";
+  if (/HTTP Error 429|Too Many Requests|rate.?limit|temporarily blocked/i.test(text))
+    return "ratelimited";
+  return null;
+}
+
 
 /** Download a single track with yt-dlp, streaming progress as it runs. */
 export async function downloadTrack(
@@ -277,7 +301,8 @@ export async function downloadTrack(
   }
   if (result.exitCode !== 0) {
     const msg = errLines.slice(-5).join(" | ");
-    if (isRateLimitError(msg)) return { status: "ratelimited" };
+    const stop = stopReasonFor(msg);
+    if (stop) return { status: "ratelimited", reason: stop };
     throw new Error(`yt-dlp failed (exit ${result.exitCode}): ${msg}`);
   }
   if (meta) {

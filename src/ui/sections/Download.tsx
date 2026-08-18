@@ -27,7 +27,12 @@ import {
   trackDisplayTitle,
 } from "../../util/format";
 import { fuzzyFilter } from "../../util/fuzzy";
-import { WAITING_FOR_TOOLS, type QueueItem } from "../../download/queue";
+import {
+  BOT_GATE,
+  TOO_MANY_FAILURES,
+  WAITING_FOR_TOOLS,
+  type QueueItem,
+} from "../../download/queue";
 import { sanitizeName } from "../../ytdlp/args";
 import type { SourceAdapter, SourcePlaylist } from "../../sources/types";
 import { SOURCE_LABELS, type SourceId } from "../../library/types";
@@ -178,6 +183,22 @@ const MARK_COLOR: Partial<Record<QueueItem["status"], string>> = {
  * actually do something about and fall back to a generic phrase, since "f
  * Retry" is the answer to almost all of them anyway.
  */
+/**
+ * Why the queue parked, named. These ask different things of the user, and one
+ * umbrella label ("rate limited") for all of them is worse than useless: it
+ * describes a cause that often isn't happening and sends people to look at
+ * their connection when the real answer is elsewhere.
+ */
+function pausedReason(reason: string): string {
+  if (reason === WAITING_FOR_TOOLS)
+    return "Waiting for the audio engine (install ffmpeg if this persists)";
+  if (reason === BOT_GATE)
+    return "The source wants to check you're not a bot, wait a while";
+  if (reason === TOO_MANY_FAILURES)
+    return "Too many downloads failed in a row, so the rest are on hold";
+  return "Rate-limited, wait a while";
+}
+
 function shortError(e?: string): string {
   if (!e) return "couldn't save";
   const m = e.toLowerCase();
@@ -191,9 +212,15 @@ function shortError(e?: string): string {
     m.includes("404")
   )
     return "track unavailable";
+  // Checked before the generic sign-in case: this one is skipped rather than
+  // retried, so saying which kind of sign-in it wanted is worth the words.
+  if (m.includes("confirm your age") || m.includes("age-restrict"))
+    return "age-restricted";
   if (m.includes("sign in") || m.includes("login") || m.includes("age"))
     return "needs sign-in";
-  if (m.includes("403") || m.includes("forbidden")) return "blocked, retry later";
+  // Not "retry later": for label uploads the source refuses every attempt, so
+  // promising a later success is the misleading half of the old message.
+  if (m.includes("403") || m.includes("forbidden")) return "blocked by source";
   if (
     m.includes("timed out") ||
     m.includes("timeout") ||
@@ -404,11 +431,7 @@ function QueueView() {
       {s.rateLimited ? (
         <Box marginBottom={1}>
           <Text color={COLOR.warn} wrap="truncate-end">
-            {`${ICON.warn} ${
-              s.rateLimitReason === WAITING_FOR_TOOLS
-                ? "Waiting for the audio engine (install ffmpeg if this persists)"
-                : "Rate-limited, wait a while"
-            }  ${ICON.dot}  ] resumes`}
+            {`${ICON.warn} ${pausedReason(s.rateLimitReason)}  ${ICON.dot}  ] resumes`}
           </Text>
         </Box>
       ) : s.failingSource ? (

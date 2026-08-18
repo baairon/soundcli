@@ -132,18 +132,41 @@ const PERMANENT_STREAK_NOTICE = 5;
  */
 const RETAINED_ROWS_CAP = 200;
 
-/** rateLimitReason while the queue is parked waiting for the audio engine. */
+/**
+ * Why the queue parked. Each one gets its own banner: they are genuinely
+ * different situations, and a single umbrella label sends people hunting for
+ * causes they do not have. "Rate limited" in particular is only ever set when
+ * the platform actually said so.
+ */
 export const WAITING_FOR_TOOLS = "waiting for tools";
+export const RATE_LIMITED = "rate limited";
+export const BOT_GATE = "bot gate";
+export const TOO_MANY_FAILURES = "too many failures";
 
 /**
  * Whether a failure is the track's fault rather than the platform's mood:
- * removed, private, region-locked, copy-protected, or plain missing. These
- * can never succeed on a retry, so they neither burn retry attempts nor count
- * toward the repeated-errors circuit breaker (a playlist of dead tracks isn't
- * throttling).
+ * removed, private, region-locked, copy-protected, age-gated, or plain
+ * missing. These can never succeed on a retry, so they neither burn retry
+ * attempts nor count toward the repeated-errors circuit breaker (a playlist of
+ * dead tracks isn't throttling).
+ *
+ * Age restriction lives here rather than with the platform-level stops: it is
+ * one video needing a signed-in viewer, so it fails its own row and the rest
+ * of the queue carries on.
  */
+/**
+ * A 403 on the media URL: the source handed over the metadata and then refused
+ * the bytes.
+ *
+ * Lives here rather than beside the yt-dlp helpers so the queue can classify
+ * without reaching across a module the tests mock.
+ */
+export function isSourceBlockedError(text: string): boolean {
+  return /HTTP Error 403|\bforbidden\b/i.test(text);
+}
+
 export function isPermanentTrackError(text: string): boolean {
-  return /unavailable|private|removed|does not exist|404|not available in your country|geo.?restrict|drm/i.test(
+  return /unavailable|private|removed|does not exist|404|not available in your country|geo.?restrict|drm|confirm your age|age.?restrict|inappropriate for some users/i.test(
     text,
   );
 }
@@ -1062,7 +1085,7 @@ export class DownloadQueue extends EventEmitter {
       if (res.status === "ratelimited") {
         // Don't fail it: keep it (with its .part) and pause the whole queue.
         item.status = "paused";
-        this.onRateLimited(item.sourceLabel);
+        this.onRateLimited(res.reason === "botgate" ? BOT_GATE : RATE_LIMITED);
       } else if (res.status === "canceled") {
         // Distinguish a pause (keep it, resumable) from a real cancel.
         item.status = this.pausing.has(item.id) ? "paused" : "canceled";
@@ -1145,18 +1168,26 @@ export class DownloadQueue extends EventEmitter {
       item.status = "error";
       item.error = e instanceof Error ? e.message : String(e);
       this.logFailure(item, item.error);
-      // A run of TRANSIENT failures almost always means we're being throttled
-      // or blocked, so pause the whole queue (resumable) instead of failing
-      // the rest silently. Permanently dead tracks say nothing about the
-      // platform, so they neither count toward nor reset the streak; they
-      // feed their own per-source streak instead, which raises the
-      // stale-downloader notice without ever pausing.
-      if (!isPermanentTrackError(item.error)) {
+      // A run of TRANSIENT failures may mean we're being throttled or blocked,
+      // so pause the whole queue (resumable) instead of failing the rest
+      // silently. Permanently dead tracks say nothing about the platform, so
+      // they neither count toward nor reset the streak; they feed their own
+      // per-source streak instead, which raises the stale-downloader notice
+      // without ever pausing.
+      //
+      // Source-blocked (403) tracks are excluded too. They cluster (a playlist
+      // heavy with official label uploads hits several in a row), so counting
+      // them tripped this breaker and announced a rate limit that was never
+      // happening. They still fail their own rows, honestly labelled.
+      if (
+        !isPermanentTrackError(item.error) &&
+        !isSourceBlockedError(item.error)
+      ) {
         this.consecutiveErrors++;
         if (this.consecutiveErrors >= failureStreakLimit() && !this.rateLimited) {
-          this.onRateLimited("repeated errors");
+          this.onRateLimited(TOO_MANY_FAILURES);
         }
-      } else if (!/drm/i.test(item.error)) {
+      } else if (!isSourceBlockedError(item.error) && !/drm/i.test(item.error)) {
         // DRM is the platform telling the truth about the track, not a sign
         // of a stale extractor, so it never feeds the out-of-date hint.
         this.notePermanentFailure(item.sourceLabel);
