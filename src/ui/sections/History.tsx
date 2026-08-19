@@ -268,7 +268,6 @@ export function History() {
           playingId={playingId}
           focused={focused && !editing && !confirm}
           reserveRows={reserveRows}
-          deleteTargetsPlaying
           onDelete={handleDelete}
           onSelect={handleSelect}
         />

@@ -33,11 +33,6 @@ interface SongListProps {
   onSelect: (value: string) => void;
   /** When set, `d` on an item row (never the action row) asks to delete it. */
   onDelete?: (value: string) => void;
-  /** When true, `d` always targets the playing track (playingId) rather than
-   *  the cursor row, matching how scrub keys act on the playing song. Use in
-   *  Library and History where the playing song should be deletable without
-   *  moving the cursor to it. */
-  deleteTargetsPlaying?: boolean;
   /** Show 1-based track numbers before each item (the drill-in playlist look). */
   numbered?: boolean;
   /** When set, `t` on an item row (never the action row) asks to rename it. */
@@ -81,7 +76,6 @@ export function SongList({
   reserveRows = 0,
   onSelect,
   onDelete,
-  deleteTargetsPlaying,
   numbered,
   onRename,
 }: SongListProps) {
@@ -144,14 +138,10 @@ export function SongList({
         const v = values[clamped];
         if (v) onSelect(v);
       } else if (input === "d" && onDelete) {
-        // deleteTargetsPlaying: 'd' acts on the playing song (like scrub keys)
-        // rather than the cursor row. Falls back to cursor when nothing plays.
-        if (deleteTargetsPlaying && playingId) {
-          onDelete(playingId);
-        } else {
-          const row = rows[rowOfIdx[clamped] ?? -1];
-          if (row?.kind === "item") onDelete(row.item.value);
-        }
+        // Always the cursor row, never the playing song: the highlight aims
+        // the delete, so what looks selected is what goes.
+        const row = rows[rowOfIdx[clamped] ?? -1];
+        if (row?.kind === "item") onDelete(row.item.value);
       } else if (input === "t" && onRename) {
         const row = rows[rowOfIdx[clamped] ?? -1];
         if (row?.kind === "item") onRename(row.item.value);

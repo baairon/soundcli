@@ -4,6 +4,7 @@ import { parseSpotifyInput } from "../sources/spotify/public";
 import { normalizeSpotifyHandle } from "../sources/spotify/handle";
 import { configFile, defaultLibraryDir } from "./paths";
 import { resolveDefaultLibraryDir } from "./music-dir";
+import { DEFAULT_AUDIO_FORMAT, type AudioFormat } from "../ytdlp/args";
 
 export interface Config {
   /** Where downloaded audio files live. */
@@ -20,6 +21,11 @@ export interface Config {
   firstRunComplete: boolean;
   /** Check for yt-dlp updates at every launch (staged, applied when idle). */
   ytdlpAutoUpdate?: boolean;
+  /**
+   * Container every download lands in. Optional so a config written before
+   * the setting existed still reads as the m4a default.
+   */
+  audioFormat?: AudioFormat;
 }
 
 /** Drop deprecated keys before returning config or writing it to disk. */
@@ -36,6 +42,7 @@ export const defaultConfig: Config = {
   spotifyProfile: undefined,
   firstRunComplete: false,
   ytdlpAutoUpdate: true,
+  audioFormat: DEFAULT_AUDIO_FORMAT,
 };
 
 export async function loadConfig(): Promise<Config> {

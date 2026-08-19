@@ -375,7 +375,6 @@ export function Library() {
           playingId={playingId}
           focused={focused && !editing && !confirm && !renaming}
           reserveRows={reserveRows}
-          deleteTargetsPlaying
           onDelete={handleDelete}
           onSelect={handleSelect}
           onRename={handleRename}

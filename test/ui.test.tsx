@@ -18,6 +18,7 @@ import { Download, PlaylistPicker } from "../src/ui/sections/Download";
 import { Playlists } from "../src/ui/sections/Playlists";
 import { History as HistorySection } from "../src/ui/sections/History";
 import { Settings } from "../src/ui/sections/Settings";
+import { ICON } from "../src/ui/theme";
 import { Sidebar } from "../src/ui/components/Sidebar";
 import { SongList } from "../src/ui/components/SongList";
 import { TextField } from "../src/ui/components/TextField";
@@ -106,11 +107,15 @@ describe("single-page sections render", () => {
     expect(frame).toContain("YouTube");
   });
 
-  it("settings shows the music folder", () => {
+  it("settings shows the music folder and the download format", () => {
     const store = makeStore();
     const { lastFrame } = render(wrap(<Settings />, store));
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("Music folder");
+    expect(frame).toContain("Open Music Folder");
+    expect(frame).toContain("Download format");
+    // The library the fake store hands back is empty, so there is nothing to
+    // convert and the row says so instead of offering the work.
+    expect(frame).toContain("Everything is already m4a");
   });
 
   it("settings shows values inline after the label column", () => {
@@ -269,6 +274,35 @@ describe("single-page sections render", () => {
     stdin.write("d");
     await tick();
     expect(got).toEqual(["t1"]);
+  });
+
+  it("SongList deletes the cursor row, not the playing song", async () => {
+    const got: string[] = [];
+    const { stdin } = render(
+      wrap(
+        <SongList
+          groups={[
+            {
+              items: [
+                { value: "t1", title: "Song one" },
+                { value: "t2", title: "Song two" },
+              ],
+            },
+          ]}
+          playingId="t1"
+          focused
+          onSelect={() => {}}
+          onDelete={(v) => got.push(v)}
+        />,
+        makeStore(),
+      ),
+    );
+    await tick();
+    stdin.write(DOWN); // cursor moves off the playing song
+    await tick();
+    stdin.write("d");
+    await tick();
+    expect(got).toEqual(["t2"]);
   });
 
   it("library shows a y/esc confirm before deleting, esc keeps the song", async () => {
@@ -450,16 +484,29 @@ describe("single-page sections render", () => {
 describe("settings move music folder", () => {
   const CTRL_U = "\u0015";
 
-  /** Menu order: youtube, soundcloud, spotify, open-folder, folder. */
-  async function openFolderPage(stdin: { write: (s: string) => void }) {
+  /** Walk the menu to a row by its label, so added rows never break this. */
+  async function openMenuRow(
+    stdin: { write: (s: string) => void },
+    lastFrame: () => string | undefined,
+    label: string,
+  ) {
     await tick();
-    for (let i = 0; i < 4; i++) {
+    for (
+      let i = 0;
+      i < 20 && !(lastFrame() ?? "").includes(`${ICON.pointer} ${label}`);
+      i++
+    ) {
       stdin.write(DOWN);
       await tick();
     }
     stdin.write("\r");
     await tick();
   }
+
+  const openFolderPage = (
+    stdin: { write: (s: string) => void },
+    lastFrame: () => string | undefined,
+  ) => openMenuRow(stdin, lastFrame, "Move music folder");
 
   it("shows the entry on the menu", () => {
     const { lastFrame } = render(wrap(<Settings />, makeStore()));
@@ -468,7 +515,7 @@ describe("settings move music folder", () => {
 
   it("opens prefilled with the current folder", async () => {
     const { stdin, lastFrame } = render(wrap(<Settings />, makeStore()));
-    await openFolderPage(stdin);
+    await openFolderPage(stdin, lastFrame);
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Move music folder");
     // defaultConfig.libraryDir collapses to a home-relative path.
@@ -478,7 +525,7 @@ describe("settings move music folder", () => {
 
   it("rejects a folder nested inside the current one (quoted paste ok)", async () => {
     const { stdin, lastFrame } = render(wrap(<Settings />, makeStore()));
-    await openFolderPage(stdin);
+    await openFolderPage(stdin, lastFrame);
     stdin.write(CTRL_U); // clear the prefill
     await tick();
     // Quoted like Windows Explorer's "Copy as path"; the quotes must strip.
@@ -510,7 +557,7 @@ describe("settings move music folder", () => {
       wrap(<Settings />, makeStore({ queue: busyQueue })),
     );
     try {
-      await openFolderPage(stdin);
+      await openFolderPage(stdin, lastFrame);
       stdin.write(CTRL_U);
       await tick();
       stdin.write(target);
@@ -567,7 +614,7 @@ describe("settings move music folder", () => {
     });
     const { stdin, lastFrame } = render(wrap(<Settings />, store));
     try {
-      await openFolderPage(stdin);
+      await openFolderPage(stdin, lastFrame);
       stdin.write(CTRL_U);
       await tick();
       stdin.write(newRoot);

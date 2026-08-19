@@ -239,7 +239,7 @@ export async function downloadTrack(
     "3",
     "--embed-metadata",
     "--embed-thumbnail",
-    ...audioFormatArgs(),
+    ...audioFormatArgs(config.audioFormat),
     "-o",
     outTpl,
     "--progress-template",

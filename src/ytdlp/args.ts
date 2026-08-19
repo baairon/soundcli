@@ -1,27 +1,49 @@
 import path from "node:path";
 
+/** Containers a library can live in. The whole library is always one of them. */
+export type AudioFormat = "m4a" | "mp3" | "opus";
+
 /**
- * yt-dlp audio extraction args. Every download lands as .m4a, with no setting
- * to get that wrong: one folder that plays in the app, in Apple Music, and on
- * a phone beats a faster download nobody can open.
+ * The choice offered in Settings, in the order it is shown, each with the one
+ * line that explains it. Kept beside the args so a new format cannot be added
+ * to the picker without the selector and the drift guard seeing it.
  *
- * Nothing is ever re-encoded. The selector does all the real work, because
- * every source we pull from already serves AAC alongside its default: YouTube
- * offers it next to Opus, Spotify resolves through YouTube, and SoundCloud
- * offers it next to mp3. Asking for that stream is selection, not conversion.
+ * Lossless is deliberately absent. None of the sources serve it, so a .flac or
+ * .wav here would be a large container wrapped around lossy audio, and wav
+ * additionally drops the tags every player reads.
+ */
+export const AUDIO_FORMATS: readonly { id: AudioFormat; detail: string }[] = [
+  { id: "m4a", detail: "Full Apple Music support, never re-encoded" },
+  { id: "mp3", detail: "Maximum compatibility, re-encoded" },
+  { id: "opus", detail: "Smallest at the same quality, no Apple Music support" },
+];
+
+export const DEFAULT_AUDIO_FORMAT: AudioFormat = "m4a";
+
+/**
+ * yt-dlp audio extraction args for the library's format, m4a unless the user
+ * chose otherwise: one folder in one format that plays where they need it
+ * beats a faster download nobody can open.
  *
- * --audio-format is the guard rail behind it, not a transcoder. On all three
- * sources yt-dlp reports "already in target format" and passes the file
- * through untouched; it would only convert for some future source that serves
- * no AAC at all, and it is there so such a source cannot quietly put Opus
- * back in the library.
+ * The selector does the real work and comes first, because a source that
+ * already serves the target format hands it over with nothing to re-encode:
+ * YouTube offers AAC next to Opus, Spotify resolves through YouTube, and
+ * SoundCloud offers mp3. Asking for that stream is selection, not conversion.
+ *
+ * --audio-format is the guard rail behind it, not a transcoder. Where the
+ * source has the format natively yt-dlp reports "already in target format"
+ * and passes the file through untouched; it converts only when the source
+ * serves nothing matching, which is what keeps a format the rest of the world
+ * refuses from quietly landing in the library.
  *
  * Bare `-x` used to be the whole function: it took whatever yt-dlp ranked
  * best, which on YouTube is Opus, and left libraries full of files Apple
  * Music refuses.
  */
-export function audioFormatArgs(): string[] {
-  return ["-f", "bestaudio[ext=m4a]/bestaudio", "-x", "--audio-format", "m4a"];
+export function audioFormatArgs(
+  format: AudioFormat = DEFAULT_AUDIO_FORMAT,
+): string[] {
+  return ["-f", `bestaudio[ext=${format}]/bestaudio`, "-x", "--audio-format", format];
 }
 
 /**
