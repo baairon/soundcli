@@ -73,6 +73,25 @@ const fakeLib = {
   all: () => [],
 } as unknown as Library;
 
+// Poll for a file the queue worker writes asynchronously instead of racing a
+// fixed sleep: slow CI runners can take well over 60ms to finish the copy.
+async function readFileEventually(
+  file: string,
+  encoding: BufferEncoding = "utf8",
+  timeoutMs = 2000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      return await fs.readFile(file, encoding);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      if (Date.now() >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+}
+
 describe("download queue dedupe", () => {
   it("skips library duplicates and in-batch duplicates", () => {
     const q = new DownloadQueue(defaultConfig, fakeLib, 1);
@@ -188,7 +207,7 @@ describe("download queue dedupe", () => {
     await new Promise((res) => setTimeout(res, 60));
 
     const copied = path.join(root, "SoundCloud", "owner1", "Set A", "Artist - Song.m4a");
-    await expect(fs.readFile(copied, "utf8")).resolves.toBe("audio");
+    await expect(readFileEventually(copied)).resolves.toBe("audio");
     expect(vi.mocked(downloadTrack)).not.toHaveBeenCalled();
     // The copy is indexed immediately as the "local" entry reconcile's
     // adoption would mint, but with the track's real metadata.
@@ -269,7 +288,7 @@ describe("download queue dedupe", () => {
 
     // File and entry both carry the real name, in the layout's stem shape.
     const healed = path.join(setDir, "demo artist name - healed demo song.m4a");
-    await expect(fs.readFile(healed, "utf8")).resolves.toBe("audio");
+    await expect(readFileEventually(healed)).resolves.toBe("audio");
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         id: existing.id,
@@ -329,7 +348,7 @@ describe("download queue dedupe", () => {
     // The enqueued entry already knew the real name: no metadata probe.
     expect(vi.mocked(enumerate)).not.toHaveBeenCalled();
     const healed = path.join(setDir, "demo artist name - demo track two.m4a");
-    await expect(fs.readFile(healed, "utf8")).resolves.toBe("audio");
+    await expect(readFileEventually(healed)).resolves.toBe("audio");
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         id: existing.id,
