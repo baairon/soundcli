@@ -17,6 +17,7 @@ import { fuzzyFilter } from "../../util/fuzzy";
 import { deleteTracks } from "../../library/delete";
 import { displaySource, setFolderKey } from "../../library/drift";
 import { renamePlaylist, renameTrack } from "../../library/rename";
+import { convertTracksToMp3 } from "../../library/convert";
 import { SOURCE_LABELS, type SourceId, type Track } from "../../library/types";
 import { shuffledOrder } from "../../player/order";
 
@@ -41,7 +42,8 @@ type View = { kind: "sets" } | { kind: "songs"; setKey: string };
 /** Pending delete: one song, or a whole set with everything in it. */
 type Confirm =
   | { kind: "song"; id: string; label: string }
-  | { kind: "set"; key: string; label: string; count: number };
+  | { kind: "set"; key: string; label: string; count: number }
+  | { kind: "convert"; setKey: string; label: string; count: number };
 
 // Module scope: pure row helpers, so the memoized groups and callbacks below
 // never need them as deps.
@@ -85,6 +87,8 @@ export function Playlists() {
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
   const [newTrackTitle, setNewTrackTitle] = useState("");
+  const [converting, setConverting] = useState(false);
+  const [convertProgress, setConvertProgress] = useState<string | null>(null);
   // Search inside the open set, mirroring the Library search box.
   const [songQ, setSongQ] = useState("");
   const [songFiltering, setSongFiltering] = useState(false);
@@ -265,10 +269,41 @@ export function Playlists() {
         setFiltering(true);
         return;
       }
+      if (input === "c" && !filtering && !confirm && !renamingSet && !converting) {
+        if (inSets) {
+          const selectedSet = visibleSets.length > 0 ? visibleSets[0] : null;
+          if (selectedSet) {
+            const tracksToConvert = selectedSet.tracks.filter(
+              (t) => !t.filePath.endsWith(".mp3")
+            );
+            if (tracksToConvert.length > 0) {
+              setConfirm({
+                kind: "convert",
+                setKey: selectedSet.key,
+                label: selectedSet.name,
+                count: tracksToConvert.length,
+              });
+            }
+          }
+        } else if (inSongs && active) {
+          const tracksToConvert = active.tracks.filter(
+            (t) => !t.filePath.endsWith(".mp3")
+          );
+          if (tracksToConvert.length > 0) {
+            setConfirm({
+              kind: "convert",
+              setKey: active.key,
+              label: active.name,
+              count: tracksToConvert.length,
+            });
+          }
+        }
+        return;
+      }
       if (input === "[") stepSourceTab(-1);
       else if (input === "]") stepSourceTab(1);
     },
-    { isActive: focused && !confirm && !filtering && !renamingSet && inSets },
+    { isActive: focused && !confirm && !filtering && !renamingSet && !renamingTrack },
   );
 
   useInput(
@@ -305,6 +340,36 @@ export function Playlists() {
     setNewPlaylistName("");
   };
 
+  const convertPlaylistToMp3 = async (setInfo: SetInfo) => {
+    setConverting(true);
+    setConvertProgress("Starting conversion…");
+
+    try {
+      const tracksToConvert = setInfo.tracks.filter(
+        (t) => !t.filePath.endsWith(".mp3")
+      );
+      const { converted } = await convertTracksToMp3(
+        config.libraryDir,
+        tracksToConvert,
+        (p) =>
+          setConvertProgress(
+            `Converting ${p.done}/${p.total}: ${p.track.title}`
+          ),
+      );
+
+      setConvertProgress(
+        `Conversion complete: ${converted}/${tracksToConvert.length} songs converted`
+      );
+      setTimeout(() => setConvertProgress(null), 3000);
+    } catch (e) {
+      setConvertProgress("Conversion failed");
+      console.error("Conversion error:", e);
+      setTimeout(() => setConvertProgress(null), 3000);
+    } finally {
+      setConverting(false);
+    }
+  };
+
   // y commits the pending delete (one song, or a whole set and its folder),
   // esc keeps it. Playback stops first when the playing song is a victim:
   // the player holds the file handle open and Windows refuses the unlink.
@@ -312,6 +377,14 @@ export function Playlists() {
     (input, key) => {
       if (key.escape) setConfirm(null);
       else if (input === "y" && confirm) {
+        if (confirm.kind === "convert") {
+          setConfirm(null);
+          const targetSet = sets.find((s) => s.key === confirm.setKey);
+          if (targetSet) {
+            void convertPlaylistToMp3(targetSet);
+          }
+          return;
+        }
         const victims =
           confirm.kind === "set"
             ? (sets.find((s) => s.key === confirm.key)?.tracks ?? [])
@@ -329,6 +402,11 @@ export function Playlists() {
 
   function confirmText(): string {
     if (!confirm) return "";
+    if (confirm.kind === "convert") {
+      return `Convert '${cleanText(confirm.label)}' to MP3  ${ICON.dot}  ${confirm.count} song${
+        confirm.count === 1 ? "" : "s"
+      }?  y Convert  ${ICON.dot}  esc Cancel`;
+    }
     return confirm.kind === "set"
       ? `Delete '${cleanText(confirm.label)}'  ${ICON.dot}  ${confirm.count} song${
           confirm.count === 1 ? "" : "s"
@@ -490,7 +568,13 @@ export function Playlists() {
     return (
       <Box flexDirection="column">
         <Header title={setLabel(active)} subtitle={subtitle} focused={focused} />
-        {confirm ? (
+        {convertProgress ? (
+          <Box marginBottom={compact ? 0 : 1} flexShrink={0}>
+            <Text color={COLOR.accent} wrap="truncate-end">
+              {convertProgress}
+            </Text>
+          </Box>
+        ) : confirm ? (
           <Box marginBottom={compact ? 0 : 1} flexShrink={0}>
             <Text color={COLOR.warn} wrap="truncate-end">
               {confirmText()}
@@ -555,7 +639,13 @@ export function Playlists() {
   // The filter/hint row carries content only while typing, confirming a
   // delete, or showing an active query; when compact and idle, drop it.
   const showSearchRow =
-    !compact || filtering || confirm !== null || searching || renamingSet;
+    !compact ||
+    filtering ||
+    confirm !== null ||
+    converting ||
+    convertProgress !== null ||
+    searching ||
+    renamingSet;
   // Rows above the list beyond the header: tabs (1) + the filter row when shown
   // (2 normally, 1 compact since its margin goes too).
   const reserveRows = 1 + (showSearchRow ? (compact ? 1 : 2) : 0);
@@ -566,7 +656,11 @@ export function Playlists() {
       <SourceTabs tabs={tabs} active={filter} count={tabCount} />
       {showSearchRow ? (
         <Box marginBottom={compact ? 0 : 1} flexShrink={0}>
-          {confirm ? (
+          {convertProgress ? (
+            <Text color={COLOR.accent} wrap="truncate-end">
+              {convertProgress}
+            </Text>
+          ) : confirm ? (
             <Text color={COLOR.warn} wrap="truncate-end">
               {confirmText()}
             </Text>

@@ -21,12 +21,13 @@ const SECTION_ORDER: Section[] = [
   "playlists",
   "history",
   "download",
+  "mp3",
   "settings",
 ];
 
-/** Map "1".."5" to its section (the sidebar's display order); null otherwise. */
+/** Map "1".."6" to its section (the sidebar's display order); null otherwise. */
 export function sectionForDigit(input: string): Section | null {
-  if (!/^[1-5]$/.test(input)) return null;
+  if (!/^[1-6]$/.test(input)) return null;
   return SECTION_ORDER[Number(input) - 1] ?? null;
 }
 
@@ -38,7 +39,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       { keys: "↑ ↓", label: "Move" },
       { keys: "PgUp PgDn", label: "Jump a page" },
       { keys: "↵", label: "Open / play" },
-      { keys: "1-5", label: "Jump section" },
+      { keys: "1-6", label: "Jump section" },
       { keys: "/", label: "Search" },
       { keys: "d", label: "Delete" },
       { keys: "t", label: "Rename" },
@@ -148,6 +149,14 @@ export function footerHints(
         { keys: "[ ]", label: "Source" },
         { keys: "d", label: "Delete" },
         { keys: "t", label: "Rename" },
+        PANE,
+        ALWAYS,
+      ];
+    case "mp3":
+      return [
+        { keys: "↵", label: "Play" },
+        { keys: "d", label: "Delete" },
+        { keys: "o", label: "Open folder" },
         PANE,
         ALWAYS,
       ];

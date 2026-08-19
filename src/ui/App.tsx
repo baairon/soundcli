@@ -44,6 +44,7 @@ import { Library as LibrarySection } from "./sections/Library";
 import { Playlists } from "./sections/Playlists";
 import { History } from "./sections/History";
 import { Download } from "./sections/Download";
+import { Mp3 } from "./sections/Mp3";
 import { Settings } from "./sections/Settings";
 import { Welcome } from "./views/Welcome";
 import { useMouseWheel } from "./hooks/useMouseWheel";
@@ -66,6 +67,8 @@ function Content({ section }: { section: Section }) {
       return <History />;
     case "download":
       return <Download />;
+    case "mp3":
+      return <Mp3 />;
     case "settings":
       return <Settings />;
   }
