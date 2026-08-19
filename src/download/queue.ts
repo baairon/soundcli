@@ -125,6 +125,33 @@ function failureStreakLimit(): number {
 const ETA_MIN_SAMPLE = 0.15;
 
 /**
+ * Jittered waits after a source block, in ms, by attempt.
+ *
+ * A 403 from the media host is the only shape YouTube's rate limit ever takes
+ * here: never a 429, and it clears on its own within minutes. The old backoff
+ * was 500ms then 1000ms, which spent every attempt inside that cooldown and
+ * failed tracks that would have worked shortly after.
+ */
+const BLOCKED_WAITS: readonly (readonly [number, number])[] = [
+  [3_000, 8_000],
+  [15_000, 30_000],
+];
+
+/**
+ * How long to wait before trying a source-blocked track again. Randomized
+ * inside the window because the workers are blocked together: an identical
+ * backoff would send them all back at the same instant and rebuild the burst
+ * that got them blocked.
+ */
+export function blockedBackoffMs(
+  attempt: number,
+  random: () => number = Math.random,
+): number {
+  const [lo, hi] = BLOCKED_WAITS[Math.min(attempt, BLOCKED_WAITS.length - 1)]!;
+  return Math.round(lo + random() * (hi - lo));
+}
+
+/**
  * Permanent failures in a row from one source before we hint that the
  * downloader itself may be stale. Genuinely dead tracks arrive scattered
  * through a playlist; a broken extractor 404s everything at once.
@@ -221,6 +248,12 @@ export class DownloadQueue extends EventEmitter {
   private runFinishedBaseline = 0;
   /** Hard failures in a row; trips the auto-pause circuit breaker. */
   private consecutiveErrors = 0;
+  /**
+   * One download at a time until something succeeds. Set by a source block:
+   * three workers crowding a host that is already refusing is what turns a
+   * short cooldown into a batch of failures.
+   */
+  private blockedUntilSuccess = false;
   /** Consecutive permanent (dead-track) failures, per source label. */
   private permanentStreaks = new Map<string, number>();
   /**
@@ -466,6 +499,7 @@ export class DownloadQueue extends EventEmitter {
     this.permanentStreaks.clear();
     this.failingSource = null;
     this.stopped = false;
+    this.blockedUntilSuccess = false;
     this.runStartedAt = null;
     this.emit("update");
     this.scheduleSave();
@@ -496,6 +530,7 @@ export class DownloadQueue extends EventEmitter {
     this.rateLimited = false;
     this.rateLimitReason = "";
     this.consecutiveErrors = 0;
+    this.blockedUntilSuccess = false;
     this.emit("update");
     this.scheduleSave();
     this.pump();
@@ -517,6 +552,7 @@ export class DownloadQueue extends EventEmitter {
     this.rateLimited = false;
     this.rateLimitReason = "";
     this.consecutiveErrors = 0;
+    this.blockedUntilSuccess = false;
     this.emit("update");
     this.scheduleSave();
     this.pump();
@@ -560,6 +596,8 @@ export class DownloadQueue extends EventEmitter {
   private noteSourceSuccess(label: string): void {
     this.permanentStreaks.delete(label);
     if (this.failingSource === label) this.failingSource = null;
+    // Something got through, so the host is answering: full width again.
+    this.blockedUntilSuccess = false;
   }
 
   /** Folder where this item should live when it came from a playlist/set. */
@@ -912,7 +950,8 @@ export class DownloadQueue extends EventEmitter {
 
   private pump(): void {
     if (this.stopped) return;
-    const limit = Math.max(1, this.concurrency);
+    // Only gates new starts: whatever is already running is left alone.
+    const limit = this.blockedUntilSuccess ? 1 : Math.max(1, this.concurrency);
     while (this.active < limit) {
       const next = this.items.find((i) => i.status === "pending");
       if (!next) break;
@@ -943,14 +982,31 @@ export class DownloadQueue extends EventEmitter {
       } catch (e) {
         if (signal.aborted) return { status: "canceled" };
         lastError = e;
+        const message = e instanceof Error ? e.message : String(e);
         // A permanently dead track (removed/private/404) can't succeed on a
         // retry, so don't burn attempts or backoff delay on it.
-        if (isPermanentTrackError(e instanceof Error ? e.message : String(e))) {
+        if (isPermanentTrackError(message)) {
           break;
         }
+        if (isSourceBlockedError(message)) {
+          // On the first refusal, not after this track has spent all three
+          // attempts: waiting 20 to 40 seconds before narrowing would leave
+          // the other workers crowding the host for that whole window, which
+          // is the burst this is here to stop.
+          this.blockedUntilSuccess = true;
+        }
         if (attempt < maxRetries) {
-          // Short, growing backoff that aborts early on cancel/pause.
-          await this.abortableSleep(baseMs * (attempt + 1), signal);
+          // A source block needs a wait that outlasts its cooldown; every
+          // other transient error keeps the short, growing backoff. Both abort
+          // early on cancel/pause.
+          // Scaled only so tests need not sit through a real cooldown.
+          const blockedScale = Number(process.env.SOUNDCLI_BLOCKED_SCALE ?? 1);
+          await this.abortableSleep(
+            isSourceBlockedError(message)
+              ? blockedBackoffMs(attempt) * blockedScale
+              : baseMs * (attempt + 1),
+            signal,
+          );
           if (signal.aborted) return { status: "canceled" };
           continue;
         }
@@ -1203,6 +1259,10 @@ export class DownloadQueue extends EventEmitter {
       // A single success resets the streak, so tracks that are individually
       // dead, scattered through a playlist, never park the queue.
       this.consecutiveErrors++;
+      if (isSourceBlockedError(item.error)) {
+        // Stop crowding a host that is refusing; one success reopens it.
+        this.blockedUntilSuccess = true;
+      }
       if (this.consecutiveErrors >= failureStreakLimit() && !this.rateLimited) {
         this.onRateLimited(streakReason(item.error));
       }

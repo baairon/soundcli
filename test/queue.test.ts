@@ -6,6 +6,7 @@ import path from "node:path";
 // Run per-track retry backoffs with zero delay so timing assertions stay fast.
 beforeAll(() => {
   process.env.SOUNDCLI_RETRY_BASE_MS = "0";
+  process.env.SOUNDCLI_BLOCKED_SCALE = "0";
 });
 
 // Keep downloads from actually running: a never-resolving stub leaves items
@@ -33,6 +34,7 @@ vi.mock("../src/util/recover-path", async (importOriginal) => {
 
 import { downloadTrack, enumerate } from "../src/ytdlp/ytdlp";
 import {
+  blockedBackoffMs,
   DownloadQueue,
   isPermanentTrackError,
   SOURCE_BLOCKING,
@@ -695,6 +697,29 @@ describe("download queue per-track retry", () => {
     expect(s.paused).toBe(2);
   });
 
+  it("waits out a source block instead of sprinting through its cooldown", () => {
+    // A 403 from the media host is YouTube's rate limit in its only shape: it
+    // never arrives as a 429 and it clears within minutes. The old 500ms and
+    // 1000ms retries spent every attempt inside that window.
+    expect(blockedBackoffMs(0, () => 0)).toBe(3_000);
+    expect(blockedBackoffMs(0, () => 1)).toBe(8_000);
+    expect(blockedBackoffMs(1, () => 0)).toBe(15_000);
+    expect(blockedBackoffMs(1, () => 1)).toBe(30_000);
+    // Past the last window it holds, rather than growing without bound.
+    expect(blockedBackoffMs(9, () => 0)).toBe(15_000);
+  });
+
+  it("jitters the wait so blocked workers don't come back in lockstep", () => {
+    // Three workers are blocked together; identical backoffs would send them
+    // all back at the same instant and rebuild the burst that blocked them.
+    const waits = [0.1, 0.5, 0.9].map((r) => blockedBackoffMs(0, () => r));
+    expect(new Set(waits).size).toBe(3);
+    for (const w of waits) {
+      expect(w).toBeGreaterThanOrEqual(3_000);
+      expect(w).toBeLessThanOrEqual(8_000);
+    }
+  });
+
   it("classifies permanent track errors vs transient platform errors", () => {
     expect(isPermanentTrackError("This video is unavailable")).toBe(true);
     expect(isPermanentTrackError("Private video")).toBe(true);
@@ -792,6 +817,83 @@ describe("download queue per-track retry", () => {
     // a queue left pumping keeps calling the shared mock during later tests.
     q.cancelAll();
     await new Promise((r) => setTimeout(r, 40));
+  });
+
+  it("saves a blocked track that works on the next attempt", async () => {
+    // The five tracks that failed on a real playlist run: refused once, fine
+    // moments later. Retrying at all is not new; waiting long enough is.
+    let calls = 0;
+    vi.mocked(downloadTrack).mockImplementation(async () => {
+      calls++;
+      if (calls === 1)
+        throw new Error(
+          "yt-dlp failed (exit 1): ERROR: unable to download video data: HTTP Error 403: Forbidden",
+        );
+      return { status: "downloaded", meta: { id: "a", title: "A", filepath: "/x" } };
+    });
+    const lib = {
+      has: () => false,
+      all: () => [],
+      upsert: vi.fn(async () => {}),
+    } as unknown as Library;
+    const q = new DownloadQueue(defaultConfig, lib, 1);
+    q.enqueue([input("youtube", "a")]);
+    await new Promise((r) => setTimeout(r, 120));
+    const s = q.stats();
+    expect(s.done).toBe(1);
+    expect(s.failed).toBe(0);
+    expect(calls).toBe(2);
+  });
+
+  it("narrows to one download at a time while the source is refusing", async () => {
+    // Three workers crowding a host that is already refusing is what turns a
+    // short cooldown into a batch of failures, so a block drops the queue to
+    // one until something gets through.
+    process.env.SOUNDCLI_FAILURE_STREAK = "99"; // don't halt mid-measurement
+    const mk = (id: string) => ({
+      source: "youtube" as SourceId,
+      sourceLabel: "youtube",
+      track: { id, title: id, downloadUrl: id },
+    });
+    let inFlight = 0;
+    let maxDuringBlock = 0;
+    let released = false;
+    let q: DownloadQueue | undefined;
+    vi.mocked(downloadTrack).mockImplementation(async (params) => {
+      // The window that matters: after the queue has seen a block, and before
+      // a success tells it the host is answering again.
+      const duringBlock = !released && (q?.stats().failed ?? 0) > 0;
+      inFlight++;
+      if (duringBlock) maxDuringBlock = Math.max(maxDuringBlock, inFlight);
+      try {
+        if (["a", "b", "c"].includes(params.url)) {
+          throw new Error(
+            "yt-dlp failed (exit 1): ERROR: unable to download video data: HTTP Error 403: Forbidden",
+          );
+        }
+        await new Promise((r) => setTimeout(r, 20));
+        released = true;
+        return {
+          status: "downloaded",
+          meta: { id: params.url, title: "X", filepath: "/x" },
+        };
+      } finally {
+        inFlight--;
+      }
+    });
+    const lib = {
+      has: () => false,
+      all: () => [],
+      upsert: vi.fn(async () => {}),
+    } as unknown as Library;
+    q = new DownloadQueue(defaultConfig, lib, 3);
+    q.enqueue([mk("a"), mk("b"), mk("c"), mk("d"), mk("e"), mk("f")]);
+    await new Promise((r) => setTimeout(r, 300));
+    // Nothing started alongside another one while the block stood.
+    expect(maxDuringBlock).toBe(1);
+    // The rest still land, so the throttle lifts rather than sticking.
+    expect(q.stats().done).toBe(3);
+    expect(q.stats().failed).toBe(3);
   });
 
   it("skips an item already in the library without downloading it", async () => {

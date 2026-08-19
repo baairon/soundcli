@@ -507,19 +507,27 @@ function QueueView() {
         </Text>
       </Box>
 
+      {/* Once there is an estimate it reads as text; before there is one the
+          spinner stands in for the word "estimating", so waiting looks like
+          motion. It renders a Box, so that case sits beside the bar rather
+          than inside the Text. */}
       <Box marginTop={1} marginBottom={1}>
         <Box width={24}>
           <GradientBar pct={s.overallPercent} width={24} />
         </Box>
-        <Text dimColor>
-          {`  ${s.overallPercent}%${
-            active
-              ? s.etaSeconds !== undefined
-                ? `  ${ICON.dot}  ~${formatEtaShort(s.etaSeconds)} left`
-                : `  ${ICON.dot}  estimating…`
-              : ""
-          }`}
-        </Text>
+        <Text dimColor>{`  ${s.overallPercent}%`}</Text>
+        {active ? (
+          s.etaSeconds !== undefined ? (
+            <Text dimColor>
+              {`  ${ICON.dot}  ~${formatEtaShort(s.etaSeconds)} left`}
+            </Text>
+          ) : (
+            <>
+              <Text dimColor>{`  ${ICON.dot}  `}</Text>
+              <Spinner />
+            </>
+          )
+        ) : null}
       </Box>
 
       <Box flexDirection="column">

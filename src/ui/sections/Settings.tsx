@@ -28,7 +28,12 @@ import {
   needsConversion,
   type ConvertProgress,
 } from "../../library/convert";
-import { AUDIO_FORMATS, DEFAULT_AUDIO_FORMAT } from "../../ytdlp/args";
+import {
+  AUDIO_FORMATS,
+  DEFAULT_AUDIO_FORMAT,
+  type AudioFormat,
+} from "../../ytdlp/args";
+import type { Track } from "../../library/types";
 import { GradientBar } from "../components/GradientBar";
 import { defaultLibraryDir } from "../../config/paths";
 import { COLOR, ICON } from "../theme";
@@ -39,11 +44,13 @@ type Mode =
   | "soundcloud"
   | "spotify"
   | "format"
+  | "convert-format"
   | "folder"
   | "folder-confirm"
   | "moving"
   | "convert-confirm"
   | "converting"
+  | "convert-done"
   | "wipe-all";
 
 /** Key hints pinned under the page content (Download's FooterHint idiom). */
@@ -66,17 +73,30 @@ export function Settings() {
   const [folderDraft, setFolderDraft] = useState("");
   const [folderError, setFolderError] = useState<string | null>(null);
   const [moveProgress, setMoveProgress] = useState<MoveProgress | null>(null);
-  const [moveNote, setMoveNote] = useState<string | null>(null);
+  /** The one line the menu can carry, whichever operation last left it. */
+  const [menuNote, setMenuNote] = useState<string | null>(null);
   const [formatCursor, setFormatCursor] = useState(0);
   const [convertProgress, setConvertProgress] =
     useState<ConvertProgress | null>(null);
-  const [convertNote, setConvertNote] = useState<string | null>(null);
+  const [convertOutcome, setConvertOutcome] = useState<{
+    target: AudioFormat;
+    converted: number;
+    failed: number;
+    total: number;
+    stopped: boolean;
+    missingEncoder: boolean;
+    interrupted: boolean;
+  } | null>(null);
   const convertAbort = useRef<AbortController | null>(null);
   const convertStart = useRef(0);
   const format = config.audioFormat ?? DEFAULT_AUDIO_FORMAT;
-  // Songs a conversion would actually touch: the one count the menu row, the
-  // confirm page and the progress bar all speak in.
-  const unconverted = library.all().filter((t) => needsConversion(t, format));
+  // What a conversion is aiming at. It starts as the download format but the
+  // Convert page picks it, so "make my library mp3" is one action from one
+  // place instead of a setting you have to change first.
+  const [convertTarget, setConvertTarget] = useState<AudioFormat>(format);
+  /** Songs a conversion to `target` would actually touch. */
+  const pending = (target: AudioFormat): Track[] =>
+    library.all().filter((t) => needsConversion(t, target));
   // Keeps the confirm page's downloads-running gate live while it's open.
   useQueueItems(queue);
 
@@ -121,15 +141,13 @@ export function Settings() {
     {
       value: "convert",
       name: "Convert library",
-      detail: unconverted.length
-        ? `Re-encode ${unconverted.length} song${
-            unconverted.length === 1 ? "" : "s"
-          } to ${format}`
-        : `Everything is already ${format}`,
+      detail: library.all().length
+        ? "Re-encode to another format"
+        : "No songs yet",
     },
     {
       value: "open-folder",
-      name: "Open Music Folder",
+      name: "Open music folder",
       detail: displayPath(config.libraryDir),
       gap: true,
     },
@@ -157,10 +175,14 @@ export function Settings() {
       return;
     }
     if (v === "convert") {
-      // Nothing to convert is not a page worth opening.
-      if (unconverted.length === 0) return;
-      setConvertNote(null);
-      setMode("convert-confirm");
+      // An empty library has nothing to aim at.
+      if (library.all().length === 0) return;
+      setMenuNote(null);
+      // Start on the first format that is not the one they already have,
+      // since picking the current one is usually a no-op.
+      const first = AUDIO_FORMATS.findIndex((f) => f.id !== format);
+      setFormatCursor(Math.max(0, first));
+      setMode("convert-format");
       return;
     }
     if (v === "format") {
@@ -209,6 +231,13 @@ export function Settings() {
     { isActive: inSubPage && mode !== "moving" && mode !== "converting" },
   );
 
+  useInput(
+    (_input, key) => {
+      if (key.return) setMode("menu");
+    },
+    { isActive: focused && mode === "convert-done" },
+  );
+
   // Stopping is safe: each song is converted atomically, so a stop leaves the
   // library consistent and a re-run picks up whatever is still in the old
   // format. Saying so beats the Moving page's "there is no backing out".
@@ -219,7 +248,8 @@ export function Settings() {
     { isActive: focused && mode === "converting" },
   );
 
-  // The format page is its own small list, with the menu's movement.
+  // Both format pages are the same small list, with the menu's movement; only
+  // what ↵ does differs.
   useInput(
     (_input, key) => {
       if (key.upArrow)
@@ -227,14 +257,23 @@ export function Settings() {
       else if (key.downArrow)
         setFormatCursor((c) => wrapStep(c, 1, AUDIO_FORMATS.length));
       else if (key.return) {
-        setConfig({
-          ...config,
-          audioFormat: AUDIO_FORMATS[formatCursor]?.id ?? DEFAULT_AUDIO_FORMAT,
-        });
-        setMode("menu");
+        const chosen = AUDIO_FORMATS[formatCursor]?.id ?? DEFAULT_AUDIO_FORMAT;
+        if (mode === "format") {
+          setConfig({ ...config, audioFormat: chosen });
+          setMode("menu");
+          return;
+        }
+        // Converting: say so instead of opening a confirm for no work.
+        if (pending(chosen).length === 0) {
+          setMenuNote(`Everything is already ${chosen}.`);
+          setMode("menu");
+          return;
+        }
+        setConvertTarget(chosen);
+        setMode("convert-confirm");
       }
     },
-    { isActive: focused && mode === "format" },
+    { isActive: focused && (mode === "format" || mode === "convert-format") },
   );
 
   // Every settings sub-page is rendered through frame(), so the hint line
@@ -327,7 +366,7 @@ export function Settings() {
   function runMove(): void {
     const oldRoot = path.resolve(config.libraryDir);
     const newRoot = folderDraft;
-    setMoveNote(null);
+    setMenuNote(null);
     setMoveProgress(null);
     setMode("moving");
     void (async () => {
@@ -365,22 +404,35 @@ export function Settings() {
       } catch {
         note ??= "Move interrupted. The library heals itself on the next scan.";
       }
-      setMoveNote(note);
+      setMenuNote(note);
       setMoveProgress(null);
       setMode("menu");
     })();
   }
 
   function runConvert(): void {
+    const target = convertTarget;
+    const songs = pending(target);
     const controller = new AbortController();
     convertAbort.current = controller;
     convertStart.current = Date.now();
-    const total = unconverted.length;
-    setConvertNote(null);
+    const total = songs.length;
+    // Converting to a format new downloads would not use guarantees a mixed
+    // library on the very next download, so the choice moves both.
+    if (target !== format) setConfig({ ...config, audioFormat: target });
+    setMenuNote(null);
     setConvertProgress({ converted: 0, failed: 0, total });
     setMode("converting");
     void (async () => {
-      let note: string | null = null;
+      let outcome = {
+        target,
+        converted: 0,
+        failed: 0,
+        total,
+        stopped: false,
+        missingEncoder: false,
+        interrupted: false,
+      };
       try {
         // mpv holds its file open and Windows refuses to replace an open file,
         // and this rewrites the library out from under the player. Inside the
@@ -388,7 +440,7 @@ export function Settings() {
         // stop must still end at the menu with something to read.
         await playback.stop();
         let lastTick = 0;
-        const { result, changed } = await convertLibrary(unconverted, format, {
+        const { result, changed } = await convertLibrary(songs, target, {
           signal: controller.signal,
           onProgress: (p) => {
             // Big libraries tick per song; ~10 updates a second is plenty.
@@ -400,29 +452,28 @@ export function Settings() {
         });
         if (changed.length) await library.upsertMany(changed);
         library.flushSync();
-        if (result.missingEncoder) {
-          note = `This computer's audio engine can't make ${format} files. Nothing was changed.`;
-        } else if (result.stopped) {
-          note = `Stopped at ${result.converted} of ${total}. Run it again to carry on.`;
-        } else if (result.failed.length) {
-          note = `${result.failed.length} song${
-            result.failed.length === 1 ? "" : "s"
-          } couldn't be converted and stayed as they were.`;
-        }
+        outcome = {
+          ...outcome,
+          converted: result.converted,
+          failed: result.failed.length,
+          stopped: result.stopped,
+          missingEncoder: result.missingEncoder,
+        };
       } catch {
-        note = "Conversion interrupted. Songs it didn't reach are untouched.";
+        outcome = { ...outcome, interrupted: true };
       }
       convertAbort.current = null;
       setConvertProgress(null);
-      setConvertNote(note);
-      setMode("menu");
+      setConvertOutcome(outcome);
+      setMode("convert-done");
     })();
   }
 
-  if (mode === "format") {
+  if (mode === "format" || mode === "convert-format") {
+    const converting = mode === "convert-format";
     const nameW = Math.max(...AUDIO_FORMATS.map((f) => f.id.length));
     return frame(
-      "Download format",
+      converting ? "Convert library" : "Download format",
       <Box flexDirection="column">
         {AUDIO_FORMATS.map((f, i) => {
           const active = i === formatCursor && focused;
@@ -439,15 +490,19 @@ export function Settings() {
               >
                 {f.id.padEnd(nameW)}
               </Text>
-              <Text dimColor>{`   ${f.detail}`}</Text>
+              <Text dimColor>
+                {`   ${converting && current ? "current" : f.detail}`}
+              </Text>
             </Box>
           );
         })}
-        <Box marginTop={1}>
-          <Text dimColor wrap="truncate-end">
-            {"Applies to new downloads. Songs you already have keep theirs."}
-          </Text>
-        </Box>
+        {converting ? null : (
+          <Box marginTop={1}>
+            <Text dimColor wrap="truncate-end">
+              {"Applies to new downloads. Songs you already have keep theirs."}
+            </Text>
+          </Box>
+        )}
       </Box>,
       `↑↓ Move  ${ICON.dot}  ↵ Choose  ${ICON.dot}  esc Back`,
     );
@@ -455,11 +510,10 @@ export function Settings() {
 
   if (mode === "convert-confirm") {
     const busy = queue.activeCount > 0;
-    const size = formatBytes(
-      unconverted.reduce((n, t) => n + (t.fileSize ?? 0), 0),
-    );
+    const songs = pending(convertTarget);
+    const size = formatBytes(songs.reduce((n, t) => n + (t.fileSize ?? 0), 0));
     return frame(
-      `Convert to ${format}?`,
+      `Convert to ${convertTarget}?`,
       <Box flexDirection="column">
         {busy ? (
           <Text color={COLOR.bad}>
@@ -469,12 +523,17 @@ export function Settings() {
           <>
             <Box marginBottom={1} flexDirection="column">
               <Text dimColor>
-                {`${ICON.dot} ${unconverted.length} song${
-                  unconverted.length === 1 ? "" : "s"
+                {`${ICON.dot} ${songs.length} song${
+                  songs.length === 1 ? "" : "s"
                 }${size ? ` · ${size}` : ""}`}
               </Text>
               <Text dimColor>{`${ICON.dot} Replaced where they already live`}</Text>
               <Text dimColor>{`${ICON.dot} Re-encoded, which can't be undone`}</Text>
+              {convertTarget !== format ? (
+                <Text dimColor>
+                  {`${ICON.dot} New downloads will be ${convertTarget} too`}
+                </Text>
+              ) : null}
             </Box>
             <Select
               isDisabled={!focused}
@@ -521,9 +580,17 @@ export function Settings() {
           <Box width={24}>
             <GradientBar pct={pct} width={24} />
           </Box>
-          <Text dimColor>
-            {`  ${pct}%${left ? `  ${ICON.dot}  ~${left} left` : ""}`}
-          </Text>
+          <Text dimColor>{`  ${pct}%`}</Text>
+          {left ? (
+            <Text dimColor>{`  ${ICON.dot}  ~${left} left`}</Text>
+          ) : (
+            // The download screen's idiom for the same moment: before there is
+            // an estimate, the spinner stands in for one.
+            <>
+              <Text dimColor>{`  ${ICON.dot}  `}</Text>
+              <Spinner />
+            </>
+          )}
         </Box>
         <Text>
           <Text dimColor>{`${converted} of ${total} converted`}</Text>
@@ -533,8 +600,69 @@ export function Settings() {
             </Text>
           ) : null}
         </Text>
-        <HintLine>{`c Stop  ${ICON.dot}  keep the app open`}</HintLine>
+        <Box marginTop={1}>
+          <Text dimColor>Keep the app open until this finishes.</Text>
+        </Box>
+        <HintLine>{"c Stop"}</HintLine>
       </Box>
+    );
+  }
+
+  if (mode === "convert-done" && convertOutcome) {
+    const o = convertOutcome;
+    const resolved = o.converted + o.failed;
+    // The real fraction, so a clean run fills the bar and a stopped one shows
+    // how far it actually got rather than claiming the whole batch.
+    const pct = o.total > 0 ? Math.round((resolved / o.total) * 100) : 100;
+    // Never claim a conversion that did not happen: a run where every song
+    // failed is not "Converted to mp3", however full the bar looks.
+    const nothingLanded = o.converted === 0 && o.failed > 0;
+    const title = o.missingEncoder || nothingLanded
+      ? "Nothing converted"
+      : o.interrupted
+        ? "Conversion interrupted"
+        : o.stopped
+          ? "Stopped"
+          : `Converted to ${o.target}`;
+    // One plain sentence when there is something to know beyond the tally.
+    const aside = o.missingEncoder
+      ? `This computer's audio engine can't make ${o.target} files.`
+      : o.interrupted
+        ? "Songs it didn't reach are untouched."
+        : nothingLanded
+          ? "The songs you had are untouched."
+          : o.stopped
+            ? "Run it again to carry on."
+            : null;
+    return frame(
+      title,
+      // Deliberately the converting page at rest: same bar in the same place,
+      // same counts line under it, so finishing reads as that screen ending
+      // rather than as a different one arriving.
+      <Box flexDirection="column">
+        <Box marginBottom={1}>
+          <Box width={24}>
+            <GradientBar pct={pct} width={24} />
+          </Box>
+          <Text dimColor>{`  ${pct}%`}</Text>
+        </Box>
+        <Text>
+          <Text dimColor>{`${o.converted} of ${o.total} converted`}</Text>
+          {o.failed > 0 ? (
+            <Text color={COLOR.bad} dimColor>
+              {`  ${ICON.dot}  ${o.failed} failed`}
+            </Text>
+          ) : null}
+        </Text>
+        {aside ? (
+          <Box marginTop={1}>
+            <Text dimColor wrap="truncate-end">
+              {aside}
+            </Text>
+          </Box>
+        ) : null}
+      </Box>,
+      "↵ Done",
     );
   }
 
@@ -747,9 +875,11 @@ export function Settings() {
           );
         })}
       </Box>
-      {(moveNote ?? convertNote) && (
+      {menuNote && (
+        // Indented to the label column: at the left edge it reads as chrome
+        // like the title and the hint, rather than as something about a row.
         <Box marginTop={1}>
-          <Text dimColor>{moveNote ?? convertNote}</Text>
+          <Text dimColor>{`  ${menuNote}`}</Text>
         </Box>
       )}
       <HintLine>{`↑↓ Move  ${ICON.dot}  ↵ Choose`}</HintLine>
