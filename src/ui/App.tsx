@@ -1,22 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout, useStdin } from "ink";
 import { Spinner } from "@inkjs/ui";
-import { ensureBinaries, type Binaries } from "../bin/binaries";
-import { ensureFfmpeg } from "../bin/ffmpeg-fetch";
-import { ensureMpvInstalled } from "../bin/mpv-install";
-import { finalizeStagedYtDlp } from "../bin/ytdlp-fetch";
-import { maybeUpdateYtDlp } from "../bin/ytdlp-update";
-import { loadConfig, saveConfig, type Config } from "../config/config";
-import { promises as fs } from "node:fs";
-import { DownloadQueue } from "../download/queue";
-import { loadQueue } from "../download/persist";
-import { Library as LibraryStore } from "../library/library";
-import { migrateOwnerLayout } from "../library/migrate";
-import { reconcileLibrary } from "../library/reconcile";
-import { legacyArchiveFile } from "../config/paths";
+import { saveConfig, type Config } from "../config/config";
+import { createApp, type App as Core } from "../core/createApp";
 import type { Track } from "../library/types";
-import { Playback, type PlaybackState } from "../player/playback";
-import { PlayHistory } from "../player/history";
 import {
   StoreContext,
   type CaptureMode,
@@ -47,14 +34,6 @@ import { Download } from "./sections/Download";
 import { Settings } from "./sections/Settings";
 import { Welcome } from "./views/Welcome";
 import { useMouseWheel } from "./hooks/useMouseWheel";
-
-interface Boot {
-  library: LibraryStore;
-  binaries: Binaries;
-  queue: DownloadQueue;
-  playback: Playback;
-  history: PlayHistory;
-}
 
 function Content({ section }: { section: Section }) {
   switch (section) {
@@ -107,7 +86,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("Getting your music ready…");
   const [mpvStatus, setMpvStatus] = useState<string | null>(null);
-  const [boot, setBoot] = useState<Boot | null>(null);
+  const [boot, setBoot] = useState<Core | null>(null);
   const [config, setConfigState] = useState<Config | null>(null);
   // Bumped by `r` on the setup-failed screen to re-run the whole bootstrap.
   const [bootAttempt, setBootAttempt] = useState(0);
@@ -169,158 +148,25 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     if (booting.current) return;
     booting.current = true;
     void (async () => {
-      const cfg = await loadConfig();
-      // A link passed on the command line means the user has self-onboarded:
-      // skip the welcome tour and drop straight into downloading it (the
-      // saveConfig below persists the flag).
-      if (initialAdd) cfg.firstRunComplete = true;
-      const library = await LibraryStore.load();
-      // One-time layout migration (pre-owner files move into their handle
-      // folder) must finish before anything reads the library; the existence
-      // cache it fills feeds the deferred reconcile below so each file is
-      // still stat'd only once per boot.
-      const exists = new Map<string, boolean>();
-      await migrateOwnerLayout(library, cfg, exists);
-      // Library is now the source of truth, so drop the legacy yt-dlp archive.
-      void fs.rm(legacyArchiveFile, { force: true }).catch(() => {});
-      const binaries = await ensureBinaries(setStatus);
-      const playback = new Playback(binaries.mpv);
-
-      // Recently played: record every track the player actually starts,
-      // including auto-advance and next/prev, not just explicit picks.
-      const history = await PlayHistory.load();
-      let lastPlayedId: string | undefined;
-
-      const lastId = history.ids()[0];
-      if (lastId) {
-        const lastTrack = library.all().find((t) => t.id === lastId);
-        if (lastTrack) {
-          // Reconcile now runs behind the first paint, so a file deleted
-          // while the app was closed hasn't been pruned yet; one stat keeps
-          // the resume from loading a dead row (and feeds the exists cache
-          // so the deferred reconcile doesn't stat it again).
-          let present = exists.get(lastTrack.filePath);
-          if (present === undefined) {
-            present = await fs
-              .access(lastTrack.filePath)
-              .then(() => true)
-              .catch(() => false);
-            exists.set(lastTrack.filePath, present);
+      const core = await createApp({
+        initialAdd,
+        onStatus: setStatus,
+        onMpvStatus: (text, o) => {
+          setMpvStatus(text);
+          if (o?.transient) {
+            if (mpvStatusTimer.current) clearTimeout(mpvStatusTimer.current);
+            mpvStatusTimer.current = setTimeout(() => setMpvStatus(null), 8000);
           }
-          if (present) {
-            lastPlayedId = lastTrack.id;
-            void playback
-              .play(lastTrack, [lastTrack], 0, true)
-              .catch(() => {});
-          }
-        }
-      }
-
-      playback.on("state", (s: PlaybackState) => {
-        const id = s.track?.id;
-        if (id && id !== lastPlayedId) {
-          lastPlayedId = id;
-          history.record(id);
-        }
+        },
       });
-
-      // Backfill durations the player discovers: adopted files never carry
-      // one (adoption can't know it without probing audio), so their rows
-      // render no time. mpv reports the real duration on load; teach the
-      // library once per track and the row shows a time forever.
-      let lastHealedId: string | undefined;
-      playback.on("state", (s: PlaybackState) => {
-        const id = s.track?.id;
-        if (!id || s.duration <= 0 || id === lastHealedId) return;
-        const entry = library.get(id);
-        if (!entry || entry.durationSec !== undefined) return;
-        lastHealedId = id;
-        void library
-          .upsert({ ...entry, durationSec: s.duration })
-          .catch(() => {});
-      });
-
-      // Auto-install mpv in the background so the rich player "just works".
-      // Retried on every launch while it's missing: a one-time flag here once
-      // left playback silently broken forever after a single failed attempt.
-      if (!binaries.mpv) {
-        const failed = (): void => {
-          // One calm line, then quiet again: the NowPlayingBar hint stays the
-          // durable nudge while songs keep opening in the OS default app.
-          setMpvStatus(
-            "Couldn't set up the player, songs open in your default app",
-          );
-          if (mpvStatusTimer.current) clearTimeout(mpvStatusTimer.current);
-          mpvStatusTimer.current = setTimeout(() => setMpvStatus(null), 8000);
-        };
-        void ensureMpvInstalled(setMpvStatus)
-          .then((p) => {
-            if (p) {
-              setMpvStatus(null);
-              playback.enableMpv(p);
-            } else if (process.platform === "linux") {
-              // Linux never auto-installs (needs sudo); the install hint is
-              // the durable surface there, so saying "couldn't set up" about
-              // an attempt we never made would just be noise.
-              setMpvStatus(null);
-            } else {
-              failed();
-            }
-          })
-          .catch(failed);
-      }
-
-      // Downloads hard-gate on the audio engine (fetched in the background by
-      // ensureBinaries); undefined keeps the default concurrency.
-      const queue = new DownloadQueue(cfg, library, undefined, () =>
-        ensureFfmpeg(),
-      );
-      // Bring back last session's queue; pending items resume from their .part.
-      queue.restore(await loadQueue());
-
-      // Check for a newer yt-dlp on every boot (a stale extractor turns every
-      // download from a source into "failed"). Async and silent: a newer
-      // binary is staged, then promoted right away unless a download is
-      // already running the current one (then it applies next launch).
-      // Offline stays completely normal.
-      if (cfg.ytdlpAutoUpdate !== false) {
-        void maybeUpdateYtDlp()
-          .then(async (staged) => {
-            if (staged && queue.stats().downloading === 0) {
-              await finalizeStagedYtDlp();
-            }
-          })
-          .catch(() => {});
-      }
-      setConfigState(cfg);
-      setBoot({ library, binaries, queue, playback, history });
-      // Silent drift hygiene (drop dead entries + dupes) runs behind the
-      // first paint: a full music-dir walk on a big library kept the user on
-      // the boot spinner, and every heal bumps the library version so the UI
-      // catches up on its own. It holds the same in-flight flag runReconcile
-      // checks, so a focus-triggered run can't overlap it. A failure stays
-      // silent: the app is fully usable with a stale index, the next
-      // section-focus reconcile retries anyway, and throwing the setup-error
-      // screen over a working session (with the r retry gated off once boot
-      // is set) would be worse than the drift.
-      if (!reconciling.current) {
-        reconciling.current = true;
-        void reconcileLibrary(library, exists, cfg.libraryDir)
-          .then((r) => {
-            if (r.prunedMissing > 0) history.retain((id) => library.has(id));
-          })
-          .catch(() => {})
-          .finally(() => {
-            lastReconcile.current = Date.now();
-            reconciling.current = false;
-          });
-      }
+      setConfigState(core.config);
+      setBoot(core);
+      core.startBackgroundReconcile();
       if (initialAdd) {
         setSection("download");
         setRegion("content");
         setPendingAdd(initialAdd);
       }
-      void saveConfig(cfg);
     })()
       .catch((e: unknown) =>
         setError(e instanceof Error ? e.message : String(e)),
@@ -335,11 +181,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
 
   useEffect(
     () => () => {
-      boot?.queue.suspend();
-      // Library writes are debounced; flush synchronously so a mutation made
-      // in the last half second still lands before the process goes away.
-      boot?.library.flushSync();
-      boot?.playback.quit();
+      boot?.dispose();
     },
     [boot],
   );
@@ -350,25 +192,8 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   // library-backed section, guarded so runs never stack and coalesced so rapid
   // tab-hops don't restat. The folder rescan is readdir-only, so a run that
   // finds no drift stays cheap.
-  const reconciling = useRef(false);
-  const lastReconcile = useRef(0);
   const runReconcile = useCallback(() => {
-    const library = boot?.library;
-    if (!library || reconciling.current) return;
-    if (Date.now() - lastReconcile.current < 5_000) return;
-    reconciling.current = true;
-    // A fresh cache per run so the missing-check and prune passes share stats
-    // (one access per track, not two), while each run still sees current disk.
-    void reconcileLibrary(library, new Map<string, boolean>(), config?.libraryDir)
-      .then((r) => {
-        // Only touch recently-played when a prune actually removed tracks, so a
-        // reconcile that changed nothing writes nothing.
-        if (r.prunedMissing > 0) boot.history.retain((id) => library.has(id));
-      })
-      .finally(() => {
-        lastReconcile.current = Date.now();
-        reconciling.current = false;
-      });
+    boot?.reconcile(config?.libraryDir);
   }, [boot, config]);
 
   useEffect(() => {
@@ -382,9 +207,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   }, [section, runReconcile]);
 
   const quitAll = useCallback(() => {
-    boot?.queue.suspend();
-    boot?.library.flushSync();
-    boot?.playback.quit();
+    boot?.dispose();
     exit();
   }, [boot, exit]);
 

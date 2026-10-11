@@ -15,9 +15,11 @@
   },
   "scripts": {
     "dev": "tsx src/index.tsx",
-    "build": "tsup",
+    "build": "tsup && npm run build:web",
+    "build:web": "vite build --config web/vite.config.ts",
+    "gui": "vite build --config web/vite.config.ts && tsx src/index.tsx --gui",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "test": "vitest run",
     "previews": "tsx scripts/render-previews.ts",
     "prepublishOnly": "npm run build && tsx scripts/check-dist-imports.ts"
@@ -53,16 +55,22 @@
     "execa": "^9.6.1",
     "ink": "^7.0.5",
     "react": "^19.2.7",
-    "string-width": "^8.2.1"
+    "string-width": "^8.2.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@inkjs/ui": "^2.0.0",
     "@types/node": "^25.9.2",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^6.1.2",
     "ink-testing-library": "^4.0.0",
+    "react-dom": "^19.3.0",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
+    "vite": "^8.3.4",
     "vitest": "^4.1.8"
   }
 }

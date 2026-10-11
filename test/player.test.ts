@@ -339,3 +339,44 @@ describe("Playback adoptList", () => {
     expect(p.getState().list).toHaveLength(1);
   });
 });
+
+describe("Playback with the browser engine", () => {
+  it("plays without mpv or the opener, and the page drives progress and the end", async () => {
+    const opened: string[] = [];
+    const p = new Playback(null, (f) => opened.push(f));
+    p.enableBrowser();
+    const list = [track("a"), track("b")];
+
+    await p.play(list[0]!, list);
+    expect(opened).toEqual([]);
+    expect(p.getState()).toMatchObject({ engine: "browser", canControl: true, track: { id: "a" } });
+    const firstPlayId = p.getState().playId;
+
+    p.reportBrowser("a", 12.7, 200);
+    expect(p.getState()).toMatchObject({ position: 12, duration: 200 });
+    p.reportBrowser("zzz", 99, 1); // stale report from a previous track
+    expect(p.getState().position).toBe(12);
+
+    await p.togglePause();
+    expect(p.getState().paused).toBe(true);
+
+    await p.browserEnded("a");
+    expect(p.getState().track?.id).toBe("b");
+    expect(p.getState().playId).toBeGreaterThan(firstPlayId!);
+
+    await p.browserEnded("b"); // last track, repeat off
+    expect(p.getState().track).toBeNull();
+  });
+
+  it("restarts the same track on repeat one", async () => {
+    const p = new Playback(null);
+    p.enableBrowser();
+    await p.play(track("a"), [track("a")]);
+    p.cycleRepeat();
+    p.cycleRepeat();
+    const before = p.getState().playId;
+    await p.browserEnded("a");
+    expect(p.getState().track?.id).toBe("a");
+    expect(p.getState().playId).toBeGreaterThan(before!);
+  });
+});

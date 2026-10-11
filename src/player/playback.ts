@@ -5,7 +5,7 @@ import { MpvPlayer } from "./mpv";
 import { onEndedDecision, shuffledOrder, stepIndex } from "./order";
 import { openPath } from "../util/open-path";
 
-export type Engine = "mpv" | "external";
+export type Engine = "mpv" | "external" | "browser";
 /**
  * Repeat: "all" loops the whole list when it reaches the end; "one" locks the
  * current track so it replays every time it ends.
@@ -27,8 +27,11 @@ export interface PlaybackState {
   shuffle?: boolean;
   /** True while a file is loading (mpv engine only). */
   loading?: boolean;
-  /** True when transport controls actually work (engine === 'mpv'). */
+  /** True when transport controls actually work (engine === 'mpv' or 'browser'). */
   canControl?: boolean;
+  /** Bumped on every play(), so a front end that makes the sound can tell a
+   *  replay of the same track (repeat one) from a track it is already on. */
+  playId?: number;
 }
 
 export type Opener = (file: string) => void;
@@ -84,6 +87,8 @@ export class Playback extends EventEmitter {
   private mpvPath: string | null;
   private readonly opener: Opener;
   private mpv: MpvPlayer | null = null;
+  /** True when a front end (the GUI page) makes the sound: no mpv, no opener. */
+  private browser = false;
   private state: PlaybackState;
   /**
    * Play order: a permutation of list indices. Linear ([0,1,2,...]) normally,
@@ -134,6 +139,32 @@ export class Playback extends EventEmitter {
       engine,
       canControl: engine === "mpv",
     });
+  }
+
+  /**
+   * Let the GUI page play the audio. The queue logic (list, order, repeat,
+   * shuffle) stays here; the page reports position and end-of-track back.
+   */
+  enableBrowser(): void {
+    this.browser = true;
+    this.update({ engine: "browser", canControl: true, loading: false });
+  }
+
+  /** Position/duration reported by the page's audio element. */
+  reportBrowser(trackId: string, position: number, duration: number): void {
+    if (!this.browser || this.state.track?.id !== trackId) return;
+    const pos = Math.floor(position);
+    const dur = Number.isFinite(duration) ? Math.floor(duration) : 0;
+    const patch: Partial<PlaybackState> = {};
+    if (pos !== this.state.position) patch.position = pos;
+    if (dur > 0 && dur !== this.state.duration) patch.duration = dur;
+    if (Object.keys(patch).length) this.update(patch);
+  }
+
+  /** The page's audio element finished the track. */
+  async browserEnded(trackId: string): Promise<void> {
+    if (!this.browser || this.state.track?.id !== trackId) return;
+    await this.onEnded();
   }
 
   private update(patch: Partial<PlaybackState>): void {
@@ -255,9 +286,12 @@ export class Playback extends EventEmitter {
       position: 0,
       duration: track.durationSec ?? 0,
       paused: startPaused,
-      loading: Boolean(this.mpvPath),
+      loading: !this.browser && Boolean(this.mpvPath),
+      playId: (this.state.playId ?? 0) + 1,
     });
     if (newList) this.rebuildOrder();
+
+    if (this.browser) return;
 
     const m = this.ensureMpv();
     if (m) {
@@ -286,6 +320,10 @@ export class Playback extends EventEmitter {
   }
 
   async togglePause(): Promise<void> {
+    if (this.browser) {
+      if (this.state.track) this.update({ paused: !this.state.paused });
+      return;
+    }
     if (!this.mpv) return;
     const was = this.state.paused;
     this.update({ paused: !was });
@@ -298,6 +336,13 @@ export class Playback extends EventEmitter {
 
   /** Relative seek by `seconds` (mpv engine only). */
   async seek(seconds: number): Promise<void> {
+    if (this.browser) {
+      const dur = this.state.duration;
+      let next = Math.max(0, this.state.position + seconds);
+      if (dur > 0) next = Math.min(next, dur);
+      this.update({ position: next });
+      return;
+    }
     if (!this.mpv) return;
     const prev = this.state.position;
     const dur = this.state.duration;
@@ -315,6 +360,10 @@ export class Playback extends EventEmitter {
   async restart(): Promise<void> {
     const { track, list, index } = this.state;
     if (!track) return;
+    if (this.browser) {
+      await this.play(track, list, index);
+      return;
+    }
     try {
       if (this.mpv) {
         await this.mpv.seekAbsolute(0);

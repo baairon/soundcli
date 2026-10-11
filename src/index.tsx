@@ -31,6 +31,61 @@ process.on("uncaughtException", (err) => {
   process.exit(1);
 });
 
+async function runGui(port: number | undefined, open: boolean): Promise<void> {
+  const path = await import("node:path");
+  const fs = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const { createRequire } = await import("node:module");
+  const { createApp } = await import("./core/createApp");
+  const { startGuiServer } = await import("./gui/server");
+  const { openPath } = await import("./util/open-path");
+
+  // Built page: next to the bundle when installed, ../dist/web when run from src.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const webRoot = [path.join(here, "web"), path.join(here, "..", "dist", "web")].find(
+    (d) => fs.existsSync(path.join(d, "index.html")),
+  );
+  if (!webRoot) {
+    console.error("GUI files not found. Run `npm run build:web` first.");
+    process.exitCode = 1;
+    return;
+  }
+  const version = (
+    createRequire(import.meta.url)("../package.json") as { version: string }
+  ).version;
+
+  let gui: Awaited<ReturnType<typeof startGuiServer>> | null = null;
+  let app: Awaited<ReturnType<typeof createApp>>;
+  try {
+    app = await createApp({
+      onStatus: (t) => console.log(t),
+      onMpvStatus: (t) => gui?.setMpvStatus(t),
+      browserAudio: true,
+    });
+  } catch (e) {
+    console.error(
+      `Couldn't set up: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  app.startBackgroundReconcile();
+  gui = await startGuiServer({ app, webRoot, version, port });
+
+  console.log(`soundcli GUI running at\n  ${gui.url}\nPress ctrl-c to quit.`);
+  if (open) openPath(gui.url);
+
+  const server = gui;
+  await new Promise<void>((resolve) => {
+    const stop = (): void => resolve();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  await server.close();
+  app.dispose();
+  process.exit(0);
+}
+
 async function main(): Promise<void> {
   const command = parseCliArgs(process.argv.slice(2));
 
@@ -51,6 +106,11 @@ async function main(): Promise<void> {
     console.error(`unknown argument: ${command.arg}\n`);
     console.error(HELP_TEXT);
     process.exitCode = 1;
+    return;
+  }
+
+  if (command.kind === "gui") {
+    await runGui(command.port, command.open);
     return;
   }
 

@@ -32,6 +32,34 @@ describe("parseCliArgs", () => {
     expect(parseCliArgs(["a", "b"])).toEqual({ kind: "invalid", arg: "b" });
   });
 
+  it("parses --gui with optional port and no-open", () => {
+    expect(parseCliArgs(["--gui"])).toEqual({
+      kind: "gui",
+      port: undefined,
+      open: true,
+    });
+    expect(parseCliArgs(["--gui", "--port", "4321", "--no-open"])).toEqual({
+      kind: "gui",
+      port: 4321,
+      open: false,
+    });
+  });
+
+  it("rejects a bad --gui port or stray arg", () => {
+    expect(parseCliArgs(["--gui", "--port"])).toEqual({
+      kind: "invalid",
+      arg: "--port",
+    });
+    expect(parseCliArgs(["--gui", "--port", "99999"])).toEqual({
+      kind: "invalid",
+      arg: "--port 99999",
+    });
+    expect(parseCliArgs(["--gui", "link"])).toEqual({
+      kind: "invalid",
+      arg: "link",
+    });
+  });
+
   it("help text mentions the link pass-through", () => {
     expect(HELP_TEXT).toContain("soundcli <link>");
   });
