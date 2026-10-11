@@ -50,6 +50,12 @@ export interface QueueItem {
    * Shown as "saved, unverified" in the queue UI and exempt from auto-clear.
    */
   unverifiedMatch?: boolean;
+  /**
+   * Set while a failed attempt waits out its backoff, until the next attempt
+   * reports progress: a source-block wait runs up to half a minute, and the
+   * last attempt's stale percent read as a hang for all of it.
+   */
+  retrying?: boolean;
 }
 
 export interface EnqueueInput {
@@ -70,6 +76,8 @@ export interface QueueStats {
   done: number;
   skipped: number;
   failed: number;
+  /** Failed rows `f` would re-queue: every failure except dead tracks. */
+  retryable: number;
   canceled: number;
   downloading: number;
   pending: number;
@@ -78,6 +86,9 @@ export interface QueueStats {
   rateLimitReason: string;
   /** Source label whose downloads keep permanently failing, or null. */
   failingSource: string | null;
+  /** Playlists are still being listed, so more tracks may land any moment. */
+  gathering: boolean;
+  /** Share of the batch settled (saved or failed); canceled never fills it. */
   overallPercent: number;
   /** Rough, self-correcting estimate of seconds left for the whole batch. */
   etaSeconds?: number;
@@ -107,11 +118,12 @@ function healthyTitle(
 }
 
 /**
- * Pause the whole queue after this many hard failures in a row. A cluster of
- * back-to-back failures almost always means the platform is throttling/blocking
- * us (not that the tracks are individually broken), so we stop and let the user
- * resume later instead of silently burning through the batch as "failed". Read
- * at runtime so tests can lower it.
+ * Pause the whole queue after this many hard failures in a row, dead tracks
+ * excluded (see isPermanentTrackError). A cluster of back-to-back failures
+ * almost always means the platform is throttling/blocking us (not that the
+ * tracks are individually broken), so we stop and let the user resume later
+ * instead of silently burning through the batch as "failed". Read at runtime
+ * so tests can lower it.
  */
 function failureStreakLimit(): number {
   return Number(process.env.SOUNDCLI_FAILURE_STREAK ?? 6);
@@ -152,8 +164,8 @@ export function blockedBackoffMs(
 }
 
 /**
- * Permanent failures in a row from one source before we hint that the
- * downloader itself may be stale. Genuinely dead tracks arrive scattered
+ * Bare misses (unavailable, 404) in a row from one source before we hint that
+ * the downloader itself may be stale. Genuinely dead tracks arrive scattered
  * through a playlist; a broken extractor 404s everything at once.
  */
 const PERMANENT_STREAK_NOTICE = 5;
@@ -177,19 +189,7 @@ export const RATE_LIMITED = "rate limited";
 export const BOT_GATE = "bot gate";
 export const TOO_MANY_FAILURES = "too many failures";
 export const SOURCE_BLOCKING = "source blocking";
-export const TRACKS_MISSING = "tracks missing";
 
-/**
- * Whether a failure is the track's fault rather than the platform's mood:
- * removed, private, region-locked, copy-protected, age-gated, or plain
- * missing. These can never succeed on a retry, so they neither burn retry
- * attempts nor count toward the repeated-errors circuit breaker (a playlist of
- * dead tracks isn't throttling).
- *
- * Age restriction lives here rather than with the platform-level stops: it is
- * one video needing a signed-in viewer, so it fails its own row and the rest
- * of the queue carries on.
- */
 /**
  * A 403 on the media URL: the source handed over the metadata and then refused
  * the bytes.
@@ -201,22 +201,32 @@ export function isSourceBlockedError(text: string): boolean {
   return /HTTP Error 403|\bforbidden\b/i.test(text);
 }
 
+/**
+ * Whether a failure is the track's fault rather than the platform's mood:
+ * removed, private, region-locked, copy-protected, age-gated, or plain
+ * missing. These can never succeed on a retry, so they burn no retry attempts,
+ * never count toward (or reset) the repeated-errors circuit breaker, and `f`
+ * leaves them alone: a playlist of dead tracks isn't throttling, and a cluster
+ * of them (one artist's protected catalog) says nothing about the rest.
+ *
+ * Age restriction lives here rather than with the platform-level stops: it is
+ * one video needing a signed-in viewer, so it fails its own row and the rest
+ * of the queue carries on. "Service Unavailable" and "temporarily unavailable"
+ * describe the host, not the track, so they stay transient.
+ */
 export function isPermanentTrackError(text: string): boolean {
-  return /unavailable|private|removed|does not exist|404|not available in your country|geo.?restrict|drm|confirm your age|age.?restrict|inappropriate for some users/i.test(
+  return /(?<!service |temporarily )unavailable|private|removed|does not exist|404|your country|geo.?restrict|drm|confirm your age|age.?restrict|inappropriate for some users/i.test(
     text,
   );
 }
 
 /**
- * Which halt a streak earned, named after the failure that tripped it. Every
- * kind of failure counts toward the streak (a batch where nothing works is not
- * worth grinding through), but they are genuinely different situations, so the
- * banner says which one instead of blaming a rate limit for all three.
+ * Which halt a streak earned. Dead tracks never count toward one (see
+ * isPermanentTrackError), so it is either a source refusing the bytes or
+ * anything else failing over and over, and the banner says which.
  */
 function streakReason(error: string): string {
-  if (isSourceBlockedError(error)) return SOURCE_BLOCKING;
-  if (isPermanentTrackError(error)) return TRACKS_MISSING;
-  return TOO_MANY_FAILURES;
+  return isSourceBlockedError(error) ? SOURCE_BLOCKING : TOO_MANY_FAILURES;
 }
 
 /**
@@ -258,8 +268,8 @@ export class DownloadQueue extends EventEmitter {
   private permanentStreaks = new Map<string, number>();
   /**
    * Source label whose downloads keep permanently failing (a one-line UI
-   * notice). Informational only: the queue never pauses for it, and retrying
-   * with `f` keeps it up, since retrying on a stale tool fails identically.
+   * notice). Informational only: the queue never pauses for it, and `f`
+   * leaves those rows alone, since retrying on a stale tool fails identically.
    */
   private failingSource: string | null = null;
   /** One rotation check per process, so the failure log stays bounded. */
@@ -324,6 +334,7 @@ export class DownloadQueue extends EventEmitter {
     let done = this.clearedDone;
     let skipped = this.clearedSkipped;
     let failed = this.clearedFailed;
+    let retryable = 0;
     let canceled = this.clearedCanceled;
     let downloading = 0;
     let pending = 0;
@@ -331,8 +342,10 @@ export class DownloadQueue extends EventEmitter {
     for (const i of this.items) {
       if (i.status === "done") done++;
       else if (i.status === "skipped") skipped++;
-      else if (i.status === "error") failed++;
-      else if (i.status === "canceled") canceled++;
+      else if (i.status === "error") {
+        failed++;
+        if (!isPermanentTrackError(i.error ?? "")) retryable++;
+      } else if (i.status === "canceled") canceled++;
       else if (i.status === "downloading") downloading++;
       else if (i.status === "pending") pending++;
       else if (i.status === "paused") paused++;
@@ -353,6 +366,7 @@ export class DownloadQueue extends EventEmitter {
       done,
       skipped,
       failed,
+      retryable,
       canceled,
       downloading,
       pending,
@@ -360,7 +374,13 @@ export class DownloadQueue extends EventEmitter {
       rateLimited: this.rateLimited,
       rateLimitReason: this.rateLimitReason,
       failingSource: this.failingSource,
-      overallPercent: total ? Math.round((finished / total) * 100) : 0,
+      gathering:
+        this.gatherController !== null &&
+        !this.gatherController.signal.aborted,
+      // Floored, so a stopped batch never rounds up to a full bar.
+      overallPercent: total
+        ? Math.floor(((done + skipped + failed) / total) * 100)
+        : 0,
       etaSeconds: this.estimateEta(finished, downloading, pending),
     };
   }
@@ -472,6 +492,8 @@ export class DownloadQueue extends EventEmitter {
     this.batchInputTotal = 0;
     this.batchAlreadySaved = 0;
     this.batchNewTracks = 0;
+    // A dismissed batch's failures say nothing about the next one.
+    this.consecutiveErrors = 0;
     if (this.runStartedAt !== null) {
       this.runStartedAt = Date.now();
       this.runFinishedBaseline = this.stats().finished;
@@ -499,6 +521,7 @@ export class DownloadQueue extends EventEmitter {
     this.permanentStreaks.clear();
     this.failingSource = null;
     this.stopped = false;
+    this.consecutiveErrors = 0;
     this.blockedUntilSuccess = false;
     this.runStartedAt = null;
     this.emit("update");
@@ -536,11 +559,15 @@ export class DownloadQueue extends EventEmitter {
     this.pump();
   }
 
-  /** Re-queue everything that failed (clears the error). */
+  /**
+   * Re-queue every failure a retry could fix (clears the error). Dead tracks
+   * stay failed: yt-dlp only updates at launch, so this session would fail
+   * them the same way again.
+   */
   retryFailed(): void {
     let any = false;
     for (const i of this.items) {
-      if (i.status === "error") {
+      if (i.status === "error" && !isPermanentTrackError(i.error ?? "")) {
         i.status = "pending";
         i.error = undefined;
         i.percent = 0;
@@ -768,6 +795,13 @@ export class DownloadQueue extends EventEmitter {
   /** Abort everything in flight and drop anything still pending. */
   cancelAll(): void {
     this.stopped = true;
+    // Nothing is on hold after a cancel, so a halt ends with it, and a pause
+    // still settling in run() must land as canceled, not paused. The failure
+    // streak ends too, or the next batch could halt on its first miss.
+    this.rateLimited = false;
+    this.rateLimitReason = "";
+    this.consecutiveErrors = 0;
+    this.pausing.clear();
     // Stop the UI's in-flight playlist enumeration from re-feeding the queue.
     this.gatherController?.abort();
     for (const item of this.items) {
@@ -808,6 +842,16 @@ export class DownloadQueue extends EventEmitter {
   beginGather(): AbortSignal {
     this.gatherController = new AbortController();
     return this.gatherController.signal;
+  }
+
+  /**
+   * The gather behind `signal` has listed everything it will. Until then the
+   * batch is not over, however quiet the queue is between two playlists.
+   */
+  endGather(signal: AbortSignal): void {
+    if (this.gatherController?.signal !== signal) return;
+    this.gatherController = null;
+    this.emit("update");
   }
 
   /**
@@ -965,11 +1009,13 @@ export class DownloadQueue extends EventEmitter {
    * loop retries the whole attempt a couple of times before giving up). A
    * rate-limit comes back as a status (not a throw) and is returned as-is so the
    * whole-batch auto-pause still fires; aborts (cancel/pause) stop immediately.
+   * `onRetry` fires before each backoff, so the row can say it is waiting.
    */
   private async downloadWithRetry(
     params: DownloadParams,
     signal: AbortSignal,
     onProgress: (p: DownloadProgress) => void,
+    onRetry: () => void,
     maxRetries = 2,
   ): Promise<DownloadResult> {
     // Backoff base, overridable via env so tests can run retries with no delay.
@@ -996,6 +1042,7 @@ export class DownloadQueue extends EventEmitter {
           this.blockedUntilSuccess = true;
         }
         if (attempt < maxRetries) {
+          onRetry();
           // A source block needs a wait that outlasts its cooldown; every
           // other transient error keeps the short, growing backoff. Both abort
           // early on cancel/pause.
@@ -1151,6 +1198,7 @@ export class DownloadQueue extends EventEmitter {
         },
         controller.signal,
         (p) => {
+          item.retrying = false;
           if (p.percent !== undefined) item.percent = p.percent;
           if (p.speed !== undefined) item.speed = p.speed;
           if (p.eta !== undefined) item.eta = p.eta;
@@ -1159,6 +1207,10 @@ export class DownloadQueue extends EventEmitter {
             lastEmit = now;
             this.emit("update");
           }
+        },
+        () => {
+          item.retrying = true;
+          this.emit("update");
         },
       );
 
@@ -1248,17 +1300,16 @@ export class DownloadQueue extends EventEmitter {
       item.status = "error";
       item.error = e instanceof Error ? e.message : String(e);
       this.logFailure(item, item.error);
-      // A run of failures of any kind means the rest of the batch is very
-      // likely to fail the same way, so pause the whole queue (resumable)
-      // rather than burn through hundreds of rows: that is what the user would
-      // do by hand, several minutes later. The kind of failure picks which
-      // banner shows rather than deciding whether to stop, which is what keeps
-      // this honest; an earlier version excluded 403s and dead tracks
-      // precisely because stopping under a "rate limited" banner was a lie.
+      // A run of failures means the rest of the batch is very likely to fail
+      // the same way, so pause the whole queue (resumable) rather than burn
+      // through hundreds of rows: that is what the user would do by hand,
+      // several minutes later. The kind of failure picks which banner shows.
       //
-      // A single success resets the streak, so tracks that are individually
-      // dead, scattered through a playlist, never park the queue.
-      this.consecutiveErrors++;
+      // Dead tracks stay out of the count: they are the track's fault, and six
+      // DRM songs in a row once parked a hundred healthy ones under a "missing
+      // tracks" banner. They don't reset it either, so one landing between two
+      // timeouts can't hide a real streak; only a success does.
+      if (!isPermanentTrackError(item.error)) this.consecutiveErrors++;
       if (isSourceBlockedError(item.error)) {
         // Stop crowding a host that is refusing; one success reopens it.
         this.blockedUntilSuccess = true;
@@ -1269,10 +1320,10 @@ export class DownloadQueue extends EventEmitter {
       if (
         isPermanentTrackError(item.error) &&
         !isSourceBlockedError(item.error) &&
-        !/drm/i.test(item.error)
+        !/drm|private|removed|\bage\b|country|geo.?restrict/i.test(item.error)
       ) {
-        // DRM is the platform telling the truth about the track, not a sign
-        // of a stale extractor, so it never feeds the out-of-date hint.
+        // Only bare misses (unavailable, 404) hint at a stale extractor; a
+        // platform naming the reason is telling the truth about that one track.
         this.notePermanentFailure(item.sourceLabel);
       }
     } finally {
@@ -1281,6 +1332,7 @@ export class DownloadQueue extends EventEmitter {
       this.active--;
       item.speed = undefined;
       item.eta = undefined;
+      item.retrying = false;
       this.clearIfFinished(item);
       this.emit("update");
       this.scheduleSave();

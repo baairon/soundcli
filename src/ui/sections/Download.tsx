@@ -31,9 +31,9 @@ import {
   BOT_GATE,
   SOURCE_BLOCKING,
   TOO_MANY_FAILURES,
-  TRACKS_MISSING,
   WAITING_FOR_TOOLS,
   type QueueItem,
+  type QueueStats,
 } from "../../download/queue";
 import { sanitizeName } from "../../ytdlp/args";
 import type { SourceAdapter, SourcePlaylist } from "../../sources/types";
@@ -158,6 +158,13 @@ function menuNameWidth(): number {
   return Math.max(...SOURCES.map((s) => s.name.length));
 }
 
+/**
+ * Widest a list row grows. Rows pin their detail to the right edge, and on a
+ * wide pane that edge drifted a hundred columns or more from the title it
+ * describes. The summary line stays uncapped: its counts need the room.
+ */
+const ROW_WIDTH = 72;
+
 // ── Queue item rendering ────────────────────────────────────────────────
 
 // Partial on purpose: if the queue gains a new status later, we fall back to a
@@ -190,7 +197,6 @@ function pausedReason(reason: string): string {
   if (reason === WAITING_FOR_TOOLS) return "Waiting on ffmpeg";
   if (reason === BOT_GATE) return "Bot check, wait a while";
   if (reason === SOURCE_BLOCKING) return "Source keeps refusing downloads, on hold";
-  if (reason === TRACKS_MISSING) return "Too many missing tracks, on hold";
   if (reason === TOO_MANY_FAILURES) return "Too many failures in a row, on hold";
   return "Rate-limited, wait a while";
 }
@@ -198,14 +204,22 @@ function pausedReason(reason: string): string {
 /**
  * A calm, human reason for the row's right edge. Raw tool output (exit codes,
  * stderr dumps) never reaches the screen: we bucket the few causes a user can
- * actually do something about and fall back to a generic phrase, since "f
- * Retry" is the answer to almost all of them anyway.
+ * actually do something about and fall back to a generic phrase. "f Retry"
+ * covers the ones a retry can still fix.
  */
 function shortError(e?: string): string {
   if (!e) return "couldn't save";
   const m = e.toLowerCase();
   if (m.includes("missing on disk")) return "file didn't save";
   if (m.includes("drm")) return "DRM protected";
+  // The host's words, not the track's: these clear up on their own, so they
+  // read like any other blip instead of a dead track.
+  if (/service unavailable|temporarily unavailable/.test(m))
+    return "network hiccup";
+  // Ahead of the generic case: YouTube's region message also says
+  // "unavailable", and naming the lock beats calling the track gone.
+  if (m.includes("your country") || /geo.?restrict/.test(m))
+    return "region-locked";
   if (
     m.includes("unavailable") ||
     m.includes("private") ||
@@ -216,10 +230,10 @@ function shortError(e?: string): string {
     return "track unavailable";
   // Checked before the generic sign-in case: this one is skipped rather than
   // retried, so saying which kind of sign-in it wanted is worth the words.
-  if (m.includes("confirm your age") || m.includes("age-restrict"))
-    return "age-restricted";
-  if (m.includes("sign in") || m.includes("login") || m.includes("age"))
-    return "needs sign-in";
+  if (/confirm your age|age.?restrict/.test(m)) return "age-restricted";
+  // No bare "age" here: it matched "webpage", so a refused page read as a
+  // sign-in wall.
+  if (m.includes("sign in") || m.includes("login")) return "needs sign-in";
   // Not "retry later": for label uploads the source refuses every attempt, so
   // promising a later success is the misleading half of the old message.
   if (m.includes("403") || m.includes("forbidden")) return "blocked by source";
@@ -234,49 +248,43 @@ function shortError(e?: string): string {
   return "couldn't save";
 }
 
+/** What a row says on its right: progress, state, or a calm reason. */
+function rowDetail(item: QueueItem): string {
+  switch (item.status) {
+    case "downloading": {
+      // Ahead of the percent: the failed attempt's number reads as a stall
+      // for the whole backoff, which can run half a minute.
+      if (item.retrying) return "retrying…";
+      const speed = formatBytesPerSec(item.speed);
+      return item.percent > 0 || speed
+        ? `${Math.round(item.percent)}%${speed ? `  ${speed}` : ""}`
+        : "starting…";
+    }
+    case "pending":
+      return "queued";
+    case "paused":
+      return item.percent > 0 ? `paused ${Math.round(item.percent)}%` : "paused";
+    case "done":
+      return item.unverifiedMatch ? "saved, unverified" : "saved";
+    case "skipped":
+      return "already saved";
+    case "error":
+      return shortError(item.error);
+    case "canceled":
+      return "canceled";
+  }
+}
+
 /**
  * One queue row, always exactly one line: a colored status mark, the title
  * truncated to whatever space is left, and a right-aligned detail that never
  * shrinks. Errors stay short so nothing ever wraps.
  */
-function QueueRow({ item }: { item: QueueItem }) {
-  let detail = "";
-  let detailColor: string | undefined;
-  let detailDim = true;
-  switch (item.status) {
-    case "downloading": {
-      const speed = formatBytesPerSec(item.speed);
-      detail =
-        item.percent > 0 || speed
-          ? `${Math.round(item.percent)}%${speed ? `  ${speed}` : ""}`
-          : "starting…";
-      detailDim = false;
-      break;
-    }
-    case "pending":
-      detail = "queued";
-      break;
-    case "paused":
-      detail =
-        item.percent > 0 ? `paused ${Math.round(item.percent)}%` : "paused";
-      break;
-    case "done":
-      detail = item.unverifiedMatch ? "saved, unverified" : "saved";
-      break;
-    case "skipped":
-      detail = "already saved";
-      break;
-    case "error":
-      // Failed rows stay quiet: a dimmed rose mark and reason, not a wall of
-      // red. The header's failed count + "f Retry" carry the call to action.
-      detail = shortError(item.error);
-      detailColor = COLOR.bad;
-      break;
-    case "canceled":
-      detail = "canceled";
-      break;
-  }
+function QueueRow({ item, detail }: { item: QueueItem; detail: string }) {
   const active = item.status === "downloading";
+  // Failed rows stay quiet: a dimmed rose mark and reason, not a wall of red.
+  // The header's failed count (and f Retry, when any could work) carry the
+  // call to action.
   const quiet = item.status === "error";
   return (
     <Box>
@@ -292,7 +300,7 @@ function QueueRow({ item }: { item: QueueItem }) {
         </Text>
       </Box>
       <Box flexShrink={0} marginLeft={2}>
-        <Text color={detailColor} dimColor={detailDim}>
+        <Text color={quiet ? COLOR.bad : undefined} dimColor={!active}>
           {detail}
         </Text>
       </Box>
@@ -312,8 +320,8 @@ function partialNoticeText(partials: PartialNotice[]): string {
 }
 
 // Live rows sort to the top so at offset 0 the list follows the action;
-// failures sink to the bottom (the header count, f Retry, and the banner
-// carry them) instead of burying the queue under red rows.
+// failures sink to the bottom, grouped by reason (the header count, f Retry,
+// and the banner carry them) instead of burying the queue under red rows.
 const STATUS_ORDER: Record<QueueItem["status"], number> = {
   downloading: 0,
   paused: 1,
@@ -324,7 +332,22 @@ const STATUS_ORDER: Record<QueueItem["status"], number> = {
   canceled: 5,
 };
 
-function QueueView() {
+/**
+ * A batch is live while anything is unfinished, or while playlists are still
+ * being listed: between two of them nothing may be in flight, and that is not
+ * the batch ending.
+ */
+function isLive(s: QueueStats): boolean {
+  return s.downloading + s.pending + s.paused > 0 || s.gathering;
+}
+
+/**
+ * The batch on screen. Live, it owns the pane: progress, the scrolling rows,
+ * the commands. Settled, it shrinks to a receipt (the outcome line and the
+ * rows worth a second look) above the source picker, so a finished download
+ * never parks you on its failures.
+ */
+function QueueView({ receipt = false }: { receipt?: boolean }) {
   const { queue, region, listRows } = useStore();
   const items = useQueueItems(queue);
   const s = queue.stats();
@@ -337,7 +360,12 @@ function QueueView() {
   const sortedItems = useMemo(
     () =>
       [...items].sort(
-        (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status],
+        (a, b) =>
+          STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
+          // Failures cluster by reason so each run can state it once.
+          (a.status === "error"
+            ? shortError(a.error).localeCompare(shortError(b.error))
+            : 0),
       ),
     [items],
   );
@@ -347,39 +375,50 @@ function QueueView() {
   // beyond that is the progress block (2 extra rows), the rate-limit banner,
   // and the command hints, which we shed first on squashed terminals.
   const showCmds = listRows >= 6;
-  // At most one banner renders at a time (rate-limit wins), so both share
-  // the same 2-row reservation.
-  const banner = s.rateLimited || Boolean(s.failingSource);
+  // A halt shows only while it holds rows: after a cancel, or a streak that
+  // tripped on the batch's last track, nothing is on hold.
+  const halted = s.rateLimited && s.paused > 0;
+  // A receipt shares the pane with the picker, so on a squashed terminal the
+  // notice goes before the picker can overflow.
+  const roomForNotice = !receipt || listRows >= 7;
+  // At most one banner renders at a time (the halt wins), so both share the
+  // same 2-row reservation.
+  const banner = roomForNotice && (halted || Boolean(s.failingSource));
   // A cut-short note shares the banner's 2-row reservation: the rate-limit /
   // failing-source banner wins when both could show, so the note only appears
   // when no banner is up, and the row budget never needs a third slot.
   const partials = getPartials();
-  const showPartials = !banner && partials.length > 0;
-  const height = Math.max(
-    1,
-    listRows - 2 - (banner || showPartials ? 2 : 0) - (showCmds ? 2 : 0),
-  );
-  const maxOffset = Math.max(0, sortedItems.length - height);
-  const start = Math.min(offset, maxOffset);
-  const windowed = sortedItems.slice(start, start + height);
+  const showPartials = roomForNotice && !banner && partials.length > 0;
+  const notice = banner || showPartials ? 2 : 0;
+  // The receipt's rows fit around the picker (its three sources, its hint and
+  // the gaps between); whatever doesn't fit is counted on a last line instead.
+  const height = receipt
+    ? Math.max(0, listRows - 6 - notice)
+    : Math.max(1, listRows - 2 - notice - (showCmds ? 2 : 0));
+  const more =
+    receipt && height > 0 && sortedItems.length > height
+      ? sortedItems.length - (height - 1)
+      : 0;
+  const rows = more > 0 ? height - 1 : height;
+  const maxOffset = Math.max(0, sortedItems.length - rows);
+  const start = receipt ? 0 : Math.min(offset, maxOffset);
+  const windowed = sortedItems.slice(start, start + rows);
 
   // Every command acts on the whole queue (never a single track, which confused
   // people). Each key is a no-op unless it would do something. These avoid the
   // global player keys handled in App (space k, j l ← →, n p r s, + - , .).
   useInput(
     (input, key) => {
-      if (input === "[") {
+      if (input === "f") {
+        if (s.retryable > 0) queue.retryFailed();
+      } else if (receipt) {
+        // Every other key belongs to the picker below.
+      } else if (input === "[") {
         if (s.downloading + s.pending > 0) queue.pauseAll();
       } else if (input === "]") {
         if (s.paused > 0) queue.resumeAll();
       } else if (input === "c") {
-        if (s.downloading + s.pending + s.paused > 0) queue.cancelAll();
-      } else if (key.return) {
-        // A settled batch's summary is dismissed with ↵: clearing it empties
-        // the queue, which lands back on the add-music view.
-        if (s.downloading + s.pending + s.paused === 0) queue.clearFinished();
-      } else if (input === "f") {
-        if (s.failed > 0) queue.retryFailed();
+        if (isLive(s)) queue.cancelAll();
       } else if (key.upArrow) {
         setOffset(Math.max(0, start - 1));
       } else if (key.downArrow) {
@@ -401,18 +440,21 @@ function QueueView() {
     return null;
   }
 
-  const active = s.downloading > 0 || s.pending > 0;
-  // "All done" means nothing failed; "Done" means read the counts next to it.
-  // It used to say "some failed", which turned into a joke on a batch where
-  // every single track failed.
+  // Still gathering counts as active: between two playlists nothing may be in
+  // flight, and calling that "All done" was wrong for the rest of the gather.
+  const active = s.downloading > 0 || s.pending > 0 || s.gathering;
+  // "Stopped" once any of it was canceled: "Done" there read as if the whole
+  // batch ran. "All done" means nothing failed; "Done" means read the counts
+  // next to it. It used to say "some failed", which turned into a joke on a
+  // batch where every single track failed.
   const title = active
     ? "Downloading"
     : s.paused
       ? "Paused"
-      : s.failed
-        ? "Done"
-        : s.canceled > 0 && s.done + s.skipped === 0
-          ? "Canceled"
+      : s.canceled
+        ? "Stopped"
+        : s.failed
+          ? "Done"
           : "All done";
   const saved = s.done + s.skipped;
   // One segment per number that says something. A zero-valued chunk is noise,
@@ -451,22 +493,17 @@ function QueueView() {
   const cmds: { key: string; label: string }[] = [];
   if (s.downloading + s.pending > 0) cmds.push({ key: "[", label: "Pause" });
   if (s.paused > 0) cmds.push({ key: "]", label: "Resume" });
-  if (s.failed > 0) cmds.push({ key: "f", label: "Retry" });
-  if (s.downloading + s.pending + s.paused > 0)
-    cmds.push({ key: "c", label: "Cancel" });
-  else cmds.push({ key: "↵", label: "Done" });
+  // Only failures a retry could fix: a DRM or removed track fails the same
+  // way every time this session.
+  if (s.retryable > 0) cmds.push({ key: "f", label: "Retry" });
+  if (isLive(s)) cmds.push({ key: "c", label: "Cancel" });
 
   return (
     <Box flexDirection="column">
-      {s.rateLimited ? (
+      {halted ? (
         <Box marginBottom={1}>
           <Text color={COLOR.warn} wrap="truncate-end">
-            {`${ICON.warn} ${pausedReason(s.rateLimitReason)}${
-              // ] only resumes rows the halt actually parked. After a cancel
-              // there is nothing to resume, and promising the key there
-              // contradicts the command row three lines below.
-              s.paused > 0 ? `  ${ICON.dot}  ] resumes` : ""
-            }`}
+            {`${ICON.warn} ${pausedReason(s.rateLimitReason)}  ${ICON.dot}  ] resumes`}
           </Text>
         </Box>
       ) : s.failingSource ? (
@@ -510,33 +547,54 @@ function QueueView() {
       {/* Once there is an estimate it reads as text; before there is one the
           spinner stands in for the word "estimating", so waiting looks like
           motion. It renders a Box, so that case sits beside the bar rather
-          than inside the Text. */}
-      <Box marginTop={1} marginBottom={1}>
-        <Box width={24}>
-          <GradientBar pct={s.overallPercent} width={24} />
+          than inside the Text. A receipt has no bar: its counts are final. */}
+      {receipt ? null : (
+        <Box marginTop={1} marginBottom={1}>
+          <Box width={24}>
+            <GradientBar pct={s.overallPercent} width={24} />
+          </Box>
+          <Text dimColor>{`  ${s.overallPercent}%`}</Text>
+          {active ? (
+            s.etaSeconds !== undefined ? (
+              <Text dimColor>
+                {`  ${ICON.dot}  ~${formatEtaShort(s.etaSeconds)} left`}
+              </Text>
+            ) : (
+              <>
+                <Text dimColor>{`  ${ICON.dot}  `}</Text>
+                <Spinner />
+              </>
+            )
+          ) : null}
         </Box>
-        <Text dimColor>{`  ${s.overallPercent}%`}</Text>
-        {active ? (
-          s.etaSeconds !== undefined ? (
-            <Text dimColor>
-              {`  ${ICON.dot}  ~${formatEtaShort(s.etaSeconds)} left`}
-            </Text>
-          ) : (
-            <>
-              <Text dimColor>{`  ${ICON.dot}  `}</Text>
-              <Spinner />
-            </>
-          )
-        ) : null}
+      )}
+
+      <Box
+        flexDirection="column"
+        maxWidth={ROW_WIDTH}
+        marginTop={receipt && windowed.length + more > 0 ? 1 : 0}
+      >
+        {windowed.map((item, i) => {
+          const detail = rowDetail(item);
+          // A run of one reason says it once. Spaces, not nothing, so the
+          // titles beside it still truncate at the same column; live rows
+          // always show their progress.
+          const ditto =
+            i > 0 &&
+            item.status !== "downloading" &&
+            detail === rowDetail(windowed[i - 1]!);
+          return (
+            <QueueRow
+              key={item.id}
+              item={item}
+              detail={ditto ? " ".repeat(detail.length) : detail}
+            />
+          );
+        })}
+        {more > 0 ? <Text dimColor>{`  +${more} more`}</Text> : null}
       </Box>
 
-      <Box flexDirection="column">
-        {windowed.map((item) => (
-          <QueueRow key={item.id} item={item} />
-        ))}
-      </Box>
-
-      {showCmds ? (
+      {showCmds && !receipt ? (
         <Box marginTop={1}>
           <Text wrap="truncate-end">
             {cmds.map((c, i) => (
@@ -602,7 +660,7 @@ function SingleListConfirm({
   );
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" maxWidth={ROW_WIDTH}>
       <Box>
         <Text color={COLOR.accent}>{focused ? `${ICON.pointer} ` : "  "}</Text>
         <Box flexGrow={1} minWidth={0}>
@@ -781,7 +839,7 @@ export function PlaylistPicker({
       : `↵ Download highlighted  ${ICON.dot}  Space picks several`;
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" maxWidth={ROW_WIDTH}>
       {/* Truncate, never wrap: a wrapped line adds a row the height budget
           didn't reserve, which overflows the body and corrupts the redraw. */}
       {showStatus ? (
@@ -952,15 +1010,27 @@ export function Download() {
   const focused = region === "content";
   // Subscribe to queue updates so the stats snapshot below stays fresh.
   useQueueItems(queue);
-  const total = queue.stats().total;
-  // Any queue at all (even a finished one) is worth landing on: a completed
-  // batch shows its "all done" summary until the user clears it or moves on,
-  // instead of bouncing back to the source picker mid-glance.
+  const s = queue.stats();
+  const total = s.total;
   const hasItems = total > 0;
+  // A batch owns the screen only while it is live. Settled, it becomes a
+  // receipt above the picker (see QueueView), so finishing hands the screen
+  // back instead of parking on a summary that has to be dismissed.
+  const live = isLive(s);
   const [step, setStep] = useState<Step>(() =>
     hasItems ? { name: "queue" } : { name: "pick-source" },
   );
   const [filtering, setFiltering] = useState(false);
+
+  /**
+   * A settled batch is a receipt, read once: starting the next batch or
+   * leaving the section retires it, so its tally never bleeds into a new one
+   * and old failures never greet you on the way back in.
+   */
+  function retireReceipt(): void {
+    if (!isLive(queue.stats())) queue.clearFinished();
+  }
+  useEffect(() => () => retireReceipt(), []);
 
   // Welcome pastes and CLI links land here once; consume and clear immediately.
   useEffect(() => {
@@ -982,17 +1052,18 @@ export function Download() {
     }
   }, [step.name, total]);
 
+  // The picker's search field owns every key while open: `e` is a letter
+  // there, and esc closes the search, not the picker.
+  const searching = step.name === "pick-lists" && filtering;
   // The handle prompt is a text field (owns the whole keyboard); the
   // playlist picker only claims space + esc, so the player keys stay live on it.
   const capture: CaptureMode = !focused
     ? "none"
-    : step.name === "need-handle"
+    : step.name === "need-handle" || searching
       ? "text"
-      : step.name === "pick-lists" && filtering
-        ? "text"
-        : step.name === "pick-lists"
-          ? "picker"
-          : "none";
+      : step.name === "pick-lists"
+        ? "picker"
+        : "none";
   useEffect(() => {
     setCaptureMode(capture);
     return () => setCaptureMode("none");
@@ -1006,7 +1077,7 @@ export function Download() {
       } else if (input === "e" && step.name === "pick-lists")
         setStep({ name: "need-handle", source: step.adapter.id });
     },
-    { isActive: capture !== "none" },
+    { isActive: capture !== "none" && !searching },
   );
 
   function adapterFor(source: SourceId, value: string): SourceAdapter {
@@ -1056,6 +1127,7 @@ export function Download() {
         });
         return;
       }
+      retireReceipt();
       const r = queue.enqueue(
         tracks.map((t) => ({
           source,
@@ -1178,6 +1250,7 @@ export function Download() {
     // mid-gather Cancel must stop it: otherwise each set that finishes loading
     // would re-enqueue (and revive) the just-canceled queue. The queue hands us
     // an abort signal; cancelAll/clearAll trip it and we bail before enqueuing.
+    retireReceipt();
     const signal = queue.beginGather();
     clearPartials();
     let gathered = 0;
@@ -1212,9 +1285,13 @@ export function Download() {
         );
       }
     };
-    await Promise.all(
-      Array.from({ length: Math.min(5, sel.length) }, () => worker()),
-    );
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(5, sel.length) }, () => worker()),
+      );
+    } finally {
+      queue.endGather(signal);
+    }
 
     if (signal.aborted) return; // canceled: leave the queue view's state alone
     if (queue.stats().total === 0) {
@@ -1248,7 +1325,9 @@ export function Download() {
 
   // ── Queue step ──────────────────────────────────────────────────────
 
-  if (step.name === "queue") {
+  // Only a live batch takes the pane. A settled one falls through to the
+  // picker below, which carries it as a receipt.
+  if (live && (step.name === "queue" || step.name === "pick-source")) {
     return <QueueView />;
   }
 
@@ -1401,16 +1480,28 @@ export function Download() {
 
   return (
     <Box flexDirection="column">
-      <PageIntro
-        title="Download"
-        hint={`No login  ${ICON.dot}  everything stays local`}
-        focused={focused}
-      />
+      {hasItems ? (
+        // The last batch's outcome takes the intro's place, so there is
+        // nothing to dismiss before the next download.
+        <Box marginBottom={1}>
+          <QueueView receipt />
+        </Box>
+      ) : (
+        <PageIntro
+          title="Download"
+          hint={`No login  ${ICON.dot}  everything stays local`}
+          focused={focused}
+        />
+      )}
       <DownloadHub
         onPickSource={onPickSource}
         onPaste={(raw) => void handleIncomingLink(raw)}
       />
-      <FooterHint>{`↑↓ Move  ${ICON.dot}  ↵ Choose`}</FooterHint>
+      <FooterHint>
+        {`↑↓ Move  ${ICON.dot}  ↵ Choose${
+          hasItems && s.retryable > 0 ? `  ${ICON.dot}  f Retry` : ""
+        }`}
+      </FooterHint>
     </Box>
   );
 }

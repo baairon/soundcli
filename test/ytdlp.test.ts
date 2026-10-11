@@ -9,6 +9,13 @@ describe("isRateLimitError", () => {
       isRateLimitError("Sign in to confirm you're not a bot"),
     ).toBe(true);
     expect(isRateLimitError("This IP is temporarily blocked")).toBe(true);
+    // YouTube's soft limit, worded like a dead track: it must still park the
+    // queue rather than fail the batch row by row.
+    expect(
+      isRateLimitError(
+        "ERROR: [youtube] abc: Video unavailable. This content isn't available, try again later.",
+      ),
+    ).toBe(true);
   });
 
   it("ignores ordinary failures", () => {

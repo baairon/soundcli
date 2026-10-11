@@ -38,12 +38,13 @@ import {
   DownloadQueue,
   isPermanentTrackError,
   SOURCE_BLOCKING,
-  TRACKS_MISSING,
+  TOO_MANY_FAILURES,
   WAITING_FOR_TOOLS,
 } from "../src/download/queue";
 import { defaultConfig } from "../src/config/config";
 import type { Library } from "../src/library/library";
 import type { SourceId } from "../src/library/types";
+import type { DownloadProgress } from "../src/ytdlp/progress";
 
 function input(source: SourceId, id: string, title = id, artist?: string) {
   return {
@@ -51,6 +52,11 @@ function input(source: SourceId, id: string, title = id, artist?: string) {
     sourceLabel: source,
     track: { id, title, artist, downloadUrl: "x" },
   };
+}
+
+// The id doubles as the download URL, so a mock can fail one track by name.
+function byUrl(id: string, source: SourceId = "youtube") {
+  return { ...input(source, id), track: { id, title: id, downloadUrl: id } };
 }
 
 function spotifyInput(id: string) {
@@ -520,6 +526,33 @@ describe("download queue pause/resume", () => {
     q.clearFinished();
     expect(q.getItems().some((i) => i.id === b.id)).toBe(true);
   });
+
+  it("never counts canceled tracks toward the bar", () => {
+    // A stopped batch used to show a full bar: canceled counted as finished,
+    // so cancelling everything read as 100% done.
+    const q = setup();
+    q.cancelAll();
+    const s = q.stats();
+    expect(s.canceled).toBe(2);
+    expect(s.overallPercent).toBe(0);
+  });
+
+  it("stays gathering until the listing ends or is canceled", () => {
+    // Between two playlists nothing may be in flight; that is not the batch
+    // ending, so the screen needs to know more tracks can still land.
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    const stale = q.beginGather();
+    expect(q.stats().gathering).toBe(true);
+    q.endGather(stale);
+    expect(q.stats().gathering).toBe(false);
+
+    // A finished older gather can't end a newer one; a cancel can.
+    q.beginGather();
+    q.endGather(stale);
+    expect(q.stats().gathering).toBe(true);
+    q.cancelAll();
+    expect(q.stats().gathering).toBe(false);
+  });
 });
 
 describe("download queue rate limiting", () => {
@@ -554,6 +587,30 @@ describe("download queue rate limiting", () => {
     q.retryFailed();
     await new Promise((r) => setTimeout(r, 60));
     expect(vi.mocked(downloadTrack).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("retries only the failures that could still work", async () => {
+    // A DRM track fails identically on every try this session, so offering it
+    // to f Retry only promised something that could never happen.
+    const calls: string[] = [];
+    vi.mocked(downloadTrack).mockImplementation(async (params) => {
+      calls.push(params.url);
+      if (params.url === "b")
+        throw new Error("ERROR: [soundcloud] 900000008: This video is DRM protected");
+      throw new Error("boom");
+    });
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    q.enqueue(["a", "b"].map((id) => byUrl(id)));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(q.stats().failed).toBe(2);
+    expect(q.stats().retryable).toBe(1);
+
+    q.retryFailed();
+    expect(q.getItems().find((i) => i.track.id === "b")!.status).toBe("error");
+    await new Promise((r) => setTimeout(r, 60));
+    // a: three attempts, then three more after the retry; b: its one attempt.
+    expect(calls.filter((u) => u === "a").length).toBe(6);
+    expect(calls.filter((u) => u === "b").length).toBe(1);
   });
 });
 
@@ -654,6 +711,10 @@ describe("download queue per-track retry", () => {
     expect(q.stats().failed).toBe(3);
     // The remaining items are parked as paused, not burned through as failed.
     expect(q.stats().paused).toBe(2);
+    // Cancelling the parked rows ends the hold with them: nothing is on hold.
+    q.cancelAll();
+    expect(q.stats().rateLimited).toBe(false);
+    expect(q.stats().paused).toBe(0);
   });
 
   it("stays paused after a throttle pause until the user resumes", async () => {
@@ -748,42 +809,84 @@ describe("download queue per-track retry", () => {
     expect(isPermanentTrackError("HTTP Error 403: Forbidden")).toBe(false);
     expect(isPermanentTrackError("HTTP Error 429: Too Many Requests")).toBe(false);
     expect(isPermanentTrackError("read timed out")).toBe(false);
+    // The host's words, not the track's: these clear up, so they stay transient.
+    expect(isPermanentTrackError("HTTP Error 503: Service Unavailable")).toBe(false);
+    expect(isPermanentTrackError("[Errno 11] Resource temporarily unavailable")).toBe(false);
+    // YouTube's actual region message never says "not available".
+    expect(
+      isPermanentTrackError("The uploader has not made this video available in your country"),
+    ).toBe(true);
   });
 
-  it("parks the queue on a run of dead tracks, under its own banner", async () => {
+  it("never parks the queue on a run of dead tracks", async () => {
+    // Six DRM songs in a row once parked a hundred healthy ones under "Too many
+    // missing tracks". Dead tracks are each their own fact, so the batch keeps
+    // going; a burst of bare misses still raises the stale-downloader hint.
     process.env.SOUNDCLI_FAILURE_STREAK = "3";
     vi.mocked(downloadTrack).mockRejectedValue(
       new Error("ERROR: This track is unavailable"),
     );
     const q = new DownloadQueue(defaultConfig, fakeLib, 1);
-    q.enqueue([
-      input("youtube", "a"),
-      input("youtube", "b"),
-      input("youtube", "c"),
-      input("youtube", "d"),
-    ]);
-    await new Promise((r) => setTimeout(r, 120));
+    q.enqueue(["a", "b", "c", "d", "e"].map((id) => input("youtube", id)));
+    await new Promise((r) => setTimeout(r, 150));
     const s = q.stats();
-    // Never "rate limited": this halt says what it actually saw.
-    expect(s.rateLimited).toBe(true);
-    expect(s.rateLimitReason).toBe(TRACKS_MISSING);
-    expect(s.failed).toBe(3);
-    expect(s.paused).toBe(1);
+    expect(s.rateLimited).toBe(false);
+    expect(s.paused).toBe(0);
+    expect(s.failed).toBe(5);
+    expect(s.failingSource).toBe("youtube");
     // Dead tracks still skip the per-track retries: one attempt each.
-    expect(vi.mocked(downloadTrack).mock.calls.length).toBe(3);
+    expect(vi.mocked(downloadTrack).mock.calls.length).toBe(5);
+  });
+
+  it("a dead track neither feeds nor breaks a real failure streak", async () => {
+    process.env.SOUNDCLI_FAILURE_STREAK = "3";
+    vi.mocked(downloadTrack).mockImplementation(async (params) => {
+      if (params.url === "b")
+        throw new Error("ERROR: [soundcloud] 900000008: This video is DRM protected");
+      throw new Error("ERROR: The read operation timed out");
+    });
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    q.enqueue(["a", "b", "c", "d", "e"].map((id) => byUrl(id)));
+    await new Promise((r) => setTimeout(r, 150));
+    const s = q.stats();
+    // a, c and d time out: three in a row, with the DRM track b in between.
+    expect(s.rateLimited).toBe(true);
+    expect(s.rateLimitReason).toBe(TOO_MANY_FAILURES);
+    expect(s.failed).toBe(4);
+    expect(s.paused).toBe(1);
+  });
+
+  it("a canceled batch's streak never carries into the next one", async () => {
+    process.env.SOUNDCLI_FAILURE_STREAK = "3";
+    vi.mocked(downloadTrack).mockImplementation((params) =>
+      params.url === "c"
+        ? new Promise((_, reject) =>
+            params.signal?.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            ),
+          )
+        : Promise.reject(new Error("ERROR: The read operation timed out")),
+    );
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    q.enqueue(["a", "b", "c"].map((id) => byUrl(id)));
+    await new Promise((r) => setTimeout(r, 60));
+    q.cancelAll(); // a and b failed in a row; c was mid-download
+    q.enqueue([byUrl("d")]);
+    await new Promise((r) => setTimeout(r, 60));
+    // d is the new batch's first miss, not the old streak's third.
+    expect(q.getItems().find((i) => i.track.id === "d")!.status).toBe("error");
+    expect(q.stats().rateLimited).toBe(false);
   });
 
   it("keeps going when successes break up the failures", async () => {
-    // The case the breaker must never touch: tracks that are individually dead,
-    // scattered through an otherwise healthy playlist. One success resets the
-    // streak, so three failures spread across five tracks park nothing.
+    // The case the breaker must never touch: failures broken up by downloads
+    // that work. One success resets the streak, so four failures spread
+    // across five tracks park nothing.
     process.env.SOUNDCLI_FAILURE_STREAK = "3";
-    let calls = 0;
-    vi.mocked(downloadTrack).mockImplementation(async () => {
-      calls++;
-      if (calls === 3)
+    vi.mocked(downloadTrack).mockImplementation(async (params) => {
+      if (params.url === "c")
         return { status: "downloaded", meta: { id: "c", title: "C", filepath: "/x" } };
-      throw new Error("ERROR: This track is unavailable");
+      throw new Error("ERROR: The read operation timed out");
     });
     const lib = {
       has: () => false,
@@ -791,13 +894,7 @@ describe("download queue per-track retry", () => {
       upsert: vi.fn(async () => {}),
     } as unknown as Library;
     const q = new DownloadQueue(defaultConfig, lib, 1);
-    q.enqueue([
-      input("youtube", "a"),
-      input("youtube", "b"),
-      input("youtube", "c"),
-      input("youtube", "d"),
-      input("youtube", "e"),
-    ]);
+    q.enqueue(["a", "b", "c", "d", "e"].map((id) => byUrl(id)));
     await new Promise((r) => setTimeout(r, 150));
     const s = q.stats();
     expect(s.rateLimited).toBe(false);
@@ -862,6 +959,30 @@ describe("download queue per-track retry", () => {
     expect(s.done).toBe(1);
     expect(s.failed).toBe(0);
     expect(calls).toBe(2);
+  });
+
+  it("says a track is retrying until its next attempt reports progress", async () => {
+    // A source-block wait runs up to half a minute; the failed attempt's last
+    // percent sat on the row for all of it and read as a hang.
+    let progress: ((p: DownloadProgress) => void) | undefined;
+    vi.mocked(downloadTrack)
+      .mockRejectedValueOnce(
+        new Error(
+          "yt-dlp failed (exit 1): ERROR: unable to download video data: HTTP Error 403: Forbidden",
+        ),
+      )
+      .mockImplementationOnce((_params, onProgress) => {
+        progress = onProgress;
+        return new Promise(() => {});
+      });
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    q.enqueue([input("youtube", "a")]);
+    await new Promise((r) => setTimeout(r, 30));
+    const item = q.getItems()[0]!;
+    expect(item.retrying).toBe(true);
+    progress?.({ status: "downloading", percent: 5 });
+    expect(item.retrying).toBe(false);
+    q.cancelAll();
   });
 
   it("narrows to one download at a time while the source is refusing", async () => {
@@ -1236,19 +1357,30 @@ describe("download queue stale-downloader notice", () => {
     expect(q.stats().failingSource).toBe(null);
   });
 
-  it("a DRM burst never blames the downloader (it's the platform's truth)", async () => {
-    vi.mocked(downloadTrack).mockRejectedValue(
-      new Error("ERROR: [soundcloud] 900000008: This video is DRM protected"),
-    );
+  it("a burst of stated reasons never blames the downloader or parks the queue", async () => {
+    // A platform naming why (DRM, private, removed, age, region) is telling the
+    // truth about that one track, not hinting at a stale extractor. Eight runs
+    // past the default streak limit of six.
+    const reasons = [
+      "ERROR: [soundcloud] 900000008: This video is DRM protected",
+      "ERROR: Private video",
+      "ERROR: Video unavailable. This video has been removed by the uploader",
+      "ERROR: Sign in to confirm your age",
+      "ERROR: The uploader has not made this video available in your country",
+    ];
+    const ids = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    vi.mocked(downloadTrack).mockImplementation(async (params) => {
+      throw new Error(reasons[ids.indexOf(params.url) % reasons.length]);
+    });
     const q = new DownloadQueue(defaultConfig, fakeLib, 1);
-    q.enqueue(["a", "b", "c", "d", "e"].map((id) => input("soundcloud", id)));
-    await new Promise((r) => setTimeout(r, 150));
+    q.enqueue(ids.map((id) => byUrl(id, "soundcloud")));
+    await new Promise((r) => setTimeout(r, 200));
     const s = q.stats();
-    expect(s.failed).toBe(5);
+    expect(s.failed).toBe(8);
     expect(s.failingSource).toBe(null);
     expect(s.rateLimited).toBe(false);
-    // Permanent: one attempt each, no retry burn.
-    expect(vi.mocked(downloadTrack).mock.calls.length).toBe(5);
+    // Permanent, the region message included: one attempt each, no retry burn.
+    expect(vi.mocked(downloadTrack).mock.calls.length).toBe(8);
   });
 });
 

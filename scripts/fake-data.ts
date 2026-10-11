@@ -7,7 +7,12 @@ import { defaultConfig } from "../src/config/config";
 import { PlayHistory } from "../src/player/history";
 import type { Store } from "../src/ui/store";
 import type { Track } from "../src/library/types";
-import type { DownloadQueue, QueueItem } from "../src/download/queue";
+import {
+  isPermanentTrackError,
+  type DownloadQueue,
+  type QueueItem,
+  type QueueStats,
+} from "../src/download/queue";
 import type { Playback, PlaybackState } from "../src/player/playback";
 import type { Library } from "../src/library/library";
 
@@ -88,10 +93,13 @@ export class FakeQueue extends EventEmitter {
   get doneCount() {
     return this.items.filter((i) => i.status === "done").length;
   }
-  stats() {
+  // Typed against the real stats: asQueue casts through unknown, so a field
+  // the fake forgot would otherwise reach the screen as undefined unnoticed.
+  stats(): QueueStats {
     const c = (s: string) => this.items.filter((i) => i.status === s).length;
     const total = this.items.length;
-    const finished = c("done") + c("skipped") + c("error") + c("canceled");
+    const settled = c("done") + c("skipped") + c("error");
+    const finished = settled + c("canceled");
     const downloading = c("downloading");
     return {
       total,
@@ -102,6 +110,9 @@ export class FakeQueue extends EventEmitter {
       done: c("done"),
       skipped: c("skipped"),
       failed: c("error"),
+      retryable: this.items.filter(
+        (i) => i.status === "error" && !isPermanentTrackError(i.error ?? ""),
+      ).length,
       canceled: c("canceled"),
       downloading,
       pending: c("pending"),
@@ -109,7 +120,9 @@ export class FakeQueue extends EventEmitter {
       rateLimited: this.limited,
       rateLimitReason: this.limited ? "YouTube" : "",
       failingSource: this.failing,
-      overallPercent: total ? Math.round((finished / total) * 100) : 0,
+      gathering: false,
+      // Same rule as the engine: canceled tracks never fill the bar.
+      overallPercent: total ? Math.floor((settled / total) * 100) : 0,
       etaSeconds: downloading > 0 ? 252 : undefined,
     };
   }

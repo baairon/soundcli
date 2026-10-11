@@ -187,7 +187,9 @@ export function isRateLimitError(text: string): boolean {
 /** Which of the two it is, for a banner that names the cause. */
 export function stopReasonFor(text: string): StopReason | null {
   if (/not a bot/i.test(text)) return "botgate";
-  if (/HTTP Error 429|Too Many Requests|rate.?limit|temporarily blocked/i.test(text))
+  // YouTube's soft limit wears a dead track's words: "Video unavailable. This
+  // content isn't available, try again later".
+  if (/HTTP Error 429|Too Many Requests|rate.?limit|temporarily blocked|try again later/i.test(text))
     return "ratelimited";
   return null;
 }

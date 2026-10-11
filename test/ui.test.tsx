@@ -736,20 +736,37 @@ describe("settings move music folder", () => {
 });
 
 describe("queue copy, banner, overlay, welcome paste", () => {
-  const errorItem = (id: string, title: string): QueueItem => ({
+  const errorItem = (
+    id: string,
+    title: string,
+    error = "yt-dlp failed (exit 1): ERROR: [soundcloud] Unable to download JSON metadata: HTTP Error 404: Not Found",
+  ): QueueItem => ({
     id,
     source: "soundcloud",
     sourceLabel: "SoundCloud",
     track: { id: `t-${id}`, title, downloadUrl: "x" },
     status: "error",
     percent: 0,
-    error:
-      "yt-dlp failed (exit 1): ERROR: [soundcloud] Unable to download JSON metadata: HTTP Error 404: Not Found",
+    error,
   });
+  const drm = "ERROR: [soundcloud] 900000008: This video is DRM protected";
+  // Unmounted at once: an app left mounted keeps a timer running, and enough
+  // of them starve the timing-sensitive paste test further down this file.
+  const frameOf = (store: ReturnType<typeof makeStore>): string => {
+    const { lastFrame, unmount } = render(wrap(<Download />, store));
+    const frame = lastFrame() ?? "";
+    unmount();
+    return frame;
+  };
 
   it("failed rows sink below the queue and the header says failed", () => {
     const items: QueueItem[] = [
-      errorItem("e1", "Dead Track"),
+      // A timeout, so a retry could still fix it and f Retry has a job.
+      errorItem(
+        "e1",
+        "Dead Track",
+        "yt-dlp failed (exit 1): ERROR: unable to download video data: The read operation timed out",
+      ),
       {
         id: "p1",
         source: "soundcloud",
@@ -807,9 +824,13 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     // No zero-valued chunk, and no "some failed" on a batch where all of them did.
     expect(frame).not.toContain("already saved");
     expect(frame).not.toContain("some failed");
+    // A canceled batch says it stopped rather than "Done".
+    expect(frame).toContain("Stopped");
+    // Every failure here is a dead track, so there's nothing to retry.
+    expect(frame).not.toContain("Retry");
   });
 
-  it("offers ] only while the halt still has rows parked", () => {
+  it("shows the halt only while it still has rows parked", () => {
     const row = (id: string, status: QueueItem["status"]): QueueItem => ({
       id,
       source: "soundcloud",
@@ -826,8 +847,8 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     );
     expect(parked.lastFrame() ?? "").toContain("] resumes");
 
-    // Cancelling leaves the flag set with nothing to resume, so the hint must
-    // go: ] is a no-op there and the command row already says Retry / Done.
+    // With nothing parked (a cancel, or a streak that tripped on the last
+    // track) nothing is on hold, so the banner must go with its hint.
     const canceled = render(
       wrap(
         <Download />,
@@ -835,8 +856,92 @@ describe("queue copy, banner, overlay, welcome paste", () => {
       ),
     );
     const frame = canceled.lastFrame() ?? "";
-    expect(frame).toContain("Rate-limited");
+    expect(frame).not.toContain("Rate-limited");
     expect(frame).not.toContain("] resumes");
+  });
+
+  it("states a run of one reason once and offers no retry for dead tracks", () => {
+    const items: QueueItem[] = [
+      errorItem("d1", "Track A", drm),
+      errorItem("d2", "Track B", drm),
+      errorItem("d3", "Track C", drm),
+    ];
+    const frame = frameOf(makeStore({ queue: asQueue(new FakeQueue(items)) }));
+    expect(frame.split("DRM protected").length - 1).toBe(1);
+    expect(frame).toContain("Track C");
+    expect(frame).not.toContain("Retry");
+  });
+
+  it("keeps a row's detail beside its title on a wide pane", () => {
+    // Rendered 100 columns wide: uncapped, the reason would sit at column 100.
+    const items: QueueItem[] = [
+      errorItem("w1", "Long Title ".repeat(12).trim(), drm),
+    ];
+    const frame = frameOf(makeStore({ queue: asQueue(new FakeQueue(items)) }));
+    const row = frame.split("\n").find((l) => l.includes("Long Title"));
+    expect(row).toBeDefined();
+    expect(row!.length).toBeLessThanOrEqual(72);
+    expect(row!.endsWith("DRM protected")).toBe(true);
+  });
+
+  it("says a row is retrying instead of showing a stale percent", () => {
+    const items: QueueItem[] = [
+      {
+        id: "r1",
+        source: "youtube",
+        sourceLabel: "YouTube",
+        track: { id: "t-r1", title: "Track One", downloadUrl: "x" },
+        status: "downloading",
+        percent: 37,
+        retrying: true,
+      },
+    ];
+    const frame = frameOf(makeStore({ queue: asQueue(new FakeQueue(items)) }));
+    expect(frame).toContain("retrying…");
+    expect(frame).not.toContain("37%");
+  });
+
+  it("hands the screen back to the picker once a batch settles", () => {
+    // A finished batch used to hold the whole pane until ↵ Done dismissed it.
+    // Now it is a receipt above the picker, with nothing to dismiss.
+    const settled = frameOf(
+      makeStore({ queue: asQueue(new FakeQueue([errorItem("d1", "Track A", drm)])) }),
+    );
+    expect(settled).toContain("1 failed");
+    expect(settled).toContain("Track A");
+    expect(settled).toContain("Your public playlists");
+    expect(settled).not.toContain("↵ Done");
+
+    // A live batch still owns the pane.
+    const pending: QueueItem = {
+      id: "p1",
+      source: "soundcloud",
+      sourceLabel: "SoundCloud",
+      track: { id: "t-p1", title: "Track B", downloadUrl: "x" },
+      status: "pending",
+      percent: 0,
+    };
+    const live = frameOf(makeStore({ queue: asQueue(new FakeQueue([pending])) }));
+    expect(live).toContain("Downloading");
+    expect(live).not.toContain("Your public playlists");
+  });
+
+  it("fits the receipt around the picker and counts what it can't list", () => {
+    const items: QueueItem[] = Array.from({ length: 20 }, (_, i) =>
+      errorItem(`e${i}`, `Track ${i}`, drm),
+    );
+    // listRows 14 is a body 16 rows tall: seven failures, then the count.
+    const roomy = frameOf(
+      makeStore({ listRows: 14, queue: asQueue(new FakeQueue(items)) }),
+    ).split("\n");
+    expect(roomy.length).toBeLessThanOrEqual(16);
+    expect(roomy.some((l) => l.includes("+13 more"))).toBe(true);
+    // Squashed (a body 7 rows tall): the rows go and the picker still fits.
+    const squashed = frameOf(
+      makeStore({ listRows: 5, queue: asQueue(new FakeQueue(items)) }),
+    ).split("\n");
+    expect(squashed.length).toBeLessThanOrEqual(7);
+    expect(squashed.some((l) => l.includes("Spotify"))).toBe(true);
   });
 
   it("help overlay keeps every key and label on a single line", () => {
