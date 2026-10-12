@@ -10,12 +10,17 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execa } from "execa";
 import { toolEnv } from "./binaries";
-import { downloadYtDlp, stagedYtDlpPath, ytDlpPath } from "./ytdlp-fetch";
+import {
+  downloadYtDlp,
+  stagedYtDlpPath,
+  ytDlpPath,
+  YTDLP_RELEASES,
+} from "./ytdlp-fetch";
 import { binDir } from "../config/paths";
 import { USER_AGENT, type FetchImpl } from "../util/net";
 
 /** Following this redirect reveals the latest tag (no GitHub API quota). */
-export const LATEST_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest";
+export const LATEST_URL = YTDLP_RELEASES;
 
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 

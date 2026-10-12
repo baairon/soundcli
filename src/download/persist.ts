@@ -80,6 +80,9 @@ export function restorableItems(
 }
 
 export async function saveQueue(items: QueueItem[]): Promise<void> {
+  // The suite runs real queues, and every one of them would otherwise
+  // overwrite the user's own saved queue with its fixtures.
+  if (process.env.VITEST) return;
   const snapshot: QueueSnapshot = { version: 1, items: snapshotItems(items) };
   await fs.mkdir(path.dirname(queueFile), { recursive: true });
   const tmp = `${queueFile}.tmp`;
@@ -89,6 +92,7 @@ export async function saveQueue(items: QueueItem[]): Promise<void> {
 
 /** Synchronous save for app quit, so a partial download survives even on exit. */
 export function saveQueueSync(items: QueueItem[]): void {
+  if (process.env.VITEST) return;
   const snapshot: QueueSnapshot = { version: 1, items: snapshotItems(items) };
   mkdirSync(path.dirname(queueFile), { recursive: true });
   writeFileSync(queueFile, JSON.stringify(snapshot, null, 2), "utf8");

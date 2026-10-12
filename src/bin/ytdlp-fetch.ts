@@ -5,7 +5,15 @@ import { binDir } from "../config/paths";
 import { findOnPath } from "../util/exec";
 import { fetchResilient, USER_AGENT, type FetchImpl } from "../util/net";
 
-const RELEASE_BASE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
+/**
+ * yt-dlp's nightly channel, the one upstream recommends for regular users:
+ * stable ships about monthly and sits broken for weeks whenever a platform
+ * changes under it. The version check and the download both read from here,
+ * because checking one channel and downloading the other would stage a
+ * "newer" binary on every launch.
+ */
+export const YTDLP_RELEASES =
+  "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest";
 
 /** Name of the release asset that matches the current platform/arch. */
 function assetName(): string {
@@ -43,7 +51,7 @@ export async function downloadYtDlp(
   fetchImpl: FetchImpl = fetch as FetchImpl,
 ): Promise<void> {
   await fs.mkdir(binDir, { recursive: true });
-  const url = `${RELEASE_BASE}/${assetName()}`;
+  const url = `${YTDLP_RELEASES}/download/${assetName()}`;
   const res = await fetchResilient(url, {
     fetchImpl,
     headers: { "User-Agent": USER_AGENT },

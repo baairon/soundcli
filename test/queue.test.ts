@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 
 // Run per-track retry backoffs with zero delay so timing assertions stay fast.
+// Most cases enqueue YouTube tracks, so the pacing gap is zeroed too; the
+// pacing suite sets its own.
 beforeAll(() => {
   process.env.SOUNDCLI_RETRY_BASE_MS = "0";
   process.env.SOUNDCLI_BLOCKED_SCALE = "0";
+  process.env.SOUNDCLI_YT_GAP_MS = "0";
 });
 
 // Keep downloads from actually running: a never-resolving stub leaves items
@@ -611,6 +614,138 @@ describe("download queue rate limiting", () => {
     // a: three attempts, then three more after the retry; b: its one attempt.
     expect(calls.filter((u) => u === "a").length).toBe(6);
     expect(calls.filter((u) => u === "b").length).toBe(1);
+  });
+});
+
+describe("download queue YouTube pacing", () => {
+  const started = (): string[] =>
+    vi.mocked(downloadTrack).mock.calls.map((c) => c[0].url);
+
+  // Every download lands at once, so only the pacing decides what starts.
+  function finishInstantly(): void {
+    vi.mocked(downloadTrack).mockImplementation(async (params) => ({
+      status: "downloaded",
+      meta: { id: params.url, title: params.url, filepath: `/x/${params.url}` },
+    }));
+  }
+
+  const emptyLib = (): Library =>
+    ({
+      has: () => false,
+      all: () => [],
+      upsert: vi.fn(async () => {}),
+    }) as unknown as Library;
+
+  afterEach(() => {
+    vi.mocked(downloadTrack).mockReset();
+    vi.mocked(downloadTrack).mockImplementation(() => new Promise(() => {}));
+    process.env.SOUNDCLI_YT_GAP_MS = "0";
+    delete process.env.SOUNDCLI_YT_BURST;
+  });
+
+  // These wait on outcomes instead of sleeping a fixed time, and "must not
+  // have started" is only ever asserted against a minute-long gap: a slow CI
+  // runner can stretch a wait, and a short one would let the next row through.
+  it("lets the burst through, then holds the rest", async () => {
+    process.env.SOUNDCLI_YT_BURST = "2";
+    process.env.SOUNDCLI_YT_GAP_MS = "60000";
+    finishInstantly();
+    const q = new DownloadQueue(defaultConfig, emptyLib(), 3);
+    q.enqueue(["a", "b", "c", "d"].map((id) => byUrl(id)));
+    await vi.waitFor(() => expect(q.stats().done).toBe(2));
+    expect(started()).toEqual(["a", "b"]);
+    expect(q.stats().pacing).toBe(true);
+    q.cancelAll(); // drops the pacing timer so nothing outlives the test
+  });
+
+  it("releases one start per gap once the burst is spent", async () => {
+    process.env.SOUNDCLI_YT_BURST = "2";
+    process.env.SOUNDCLI_YT_GAP_MS = "100";
+    const at: number[] = [];
+    vi.mocked(downloadTrack).mockImplementation(async (params) => {
+      at.push(Date.now());
+      return {
+        status: "downloaded",
+        meta: { id: params.url, title: params.url, filepath: `/x/${params.url}` },
+      };
+    });
+    const q = new DownloadQueue(defaultConfig, emptyLib(), 3);
+    q.enqueue(["a", "b", "c", "d"].map((id) => byUrl(id)));
+    await vi.waitFor(() => expect(q.stats().done).toBe(4), { timeout: 5000 });
+    expect(started()).toEqual(["a", "b", "c", "d"]);
+    // Lower bounds only: a slow runner can stretch a gap, never shrink it.
+    expect(at[2]! - at[1]!).toBeGreaterThanOrEqual(90);
+    expect(at[3]! - at[2]!).toBeGreaterThanOrEqual(90);
+    expect(q.stats().pacing).toBe(false);
+  });
+
+  it("keeps other sources moving while YouTube waits", async () => {
+    process.env.SOUNDCLI_YT_BURST = "1";
+    process.env.SOUNDCLI_YT_GAP_MS = "60000";
+    finishInstantly();
+    const q = new DownloadQueue(defaultConfig, emptyLib(), 3);
+    q.enqueue([
+      byUrl("y1"),
+      byUrl("y2"),
+      byUrl("s1", "soundcloud"),
+      byUrl("s2", "soundcloud"),
+    ]);
+    await vi.waitFor(() => expect(q.stats().done).toBe(3));
+    expect(started().sort()).toEqual(["s1", "s2", "y1"]);
+    q.cancelAll();
+    expect(q.stats().pacing).toBe(false);
+  });
+
+  it("never promises a finish sooner than the pacing allows", async () => {
+    process.env.SOUNDCLI_YT_BURST = "2";
+    process.env.SOUNDCLI_YT_GAP_MS = "60000";
+    finishInstantly();
+    const q = new DownloadQueue(defaultConfig, emptyLib(), 3);
+    q.enqueue(["a", "b", "c", "d", "e"].map((id) => byUrl(id)));
+    await vi.waitFor(() => expect(q.stats().done).toBe(2));
+    // Two rode the burst and finished in milliseconds, which on its own
+    // would extrapolate to "done in a moment" for the three still waiting a
+    // minute each.
+    expect(started()).toEqual(["a", "b"]);
+    expect(q.stats().etaSeconds).toBe(180);
+    // Other sources are not paced, so they add nothing to the floor.
+    q.enqueue([byUrl("s1", "soundcloud")]);
+    await vi.waitFor(() => expect(q.stats().done).toBe(3));
+    expect(q.stats().etaSeconds).toBe(180);
+    q.cancelAll();
+  });
+
+  it("counts Spotify against the YouTube budget", async () => {
+    process.env.SOUNDCLI_YT_BURST = "1";
+    process.env.SOUNDCLI_YT_GAP_MS = "60000";
+    finishInstantly();
+    const q = new DownloadQueue(defaultConfig, emptyLib(), 3);
+    q.enqueue([byUrl("y1"), byUrl("sp1", "spotify")]);
+    await vi.waitFor(() => expect(q.stats().done).toBe(1));
+    expect(started()).toEqual(["y1"]);
+    q.cancelAll();
+  });
+
+  it("never spends budget on a track that is already saved", async () => {
+    process.env.SOUNDCLI_YT_BURST = "1";
+    process.env.SOUNDCLI_YT_GAP_MS = "60000";
+    finishInstantly();
+    // "old" is owned but under a bare id title, so it is queued to heal its
+    // name: a local-only job that must neither wait nor use up the burst.
+    const lib = {
+      has: (id: string) => id === "youtube:old",
+      get: (id: string) =>
+        id === "youtube:old"
+          ? { id, source: "youtube", title: "900000001", filePath: "/x/old" }
+          : undefined,
+      all: () => [],
+      upsert: vi.fn(async () => {}),
+    } as unknown as Library;
+    const q = new DownloadQueue(defaultConfig, lib, 3);
+    q.enqueue([byUrl("old"), byUrl("y1")]);
+    await vi.waitFor(() => expect(q.stats().finished).toBe(2));
+    expect(started()).toEqual(["y1"]);
+    expect(q.stats().pacing).toBe(false);
   });
 });
 

@@ -121,6 +121,7 @@ export class FakeQueue extends EventEmitter {
       rateLimitReason: this.limited ? "YouTube" : "",
       failingSource: this.failing,
       gathering: false,
+      pacing: false,
       // Same rule as the engine: canceled tracks never fill the bar.
       overallPercent: total ? Math.floor((settled / total) * 100) : 0,
       etaSeconds: downloading > 0 ? 252 : undefined,

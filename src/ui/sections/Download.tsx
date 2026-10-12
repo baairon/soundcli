@@ -381,9 +381,10 @@ function QueueView({ receipt = false }: { receipt?: boolean }) {
   // A receipt shares the pane with the picker, so on a squashed terminal the
   // notice goes before the picker can overflow.
   const roomForNotice = !receipt || listRows >= 7;
-  // At most one banner renders at a time (the halt wins), so both share the
-  // same 2-row reservation.
-  const banner = roomForNotice && (halted || Boolean(s.failingSource));
+  // At most one banner renders at a time (the halt wins, pacing comes last),
+  // so all three share the same 2-row reservation.
+  const banner =
+    roomForNotice && (halted || Boolean(s.failingSource) || s.pacing);
   // A cut-short note shares the banner's 2-row reservation: the rate-limit /
   // failing-source banner wins when both could show, so the note only appears
   // when no banner is up, and the row budget never needs a third slot.
@@ -512,6 +513,14 @@ function QueueView({ receipt = false }: { receipt?: boolean }) {
         <Box marginBottom={1}>
           <Text color={COLOR.warn} wrap="truncate-end">
             {`${ICON.warn} ${s.failingSource} keeps failing  ${ICON.dot}  restart soundcli to update the downloader`}
+          </Text>
+        </Box>
+      ) : s.pacing ? (
+        // The gaps between YouTube downloads are deliberate; unexplained,
+        // they read as a hang.
+        <Box marginBottom={1}>
+          <Text dimColor wrap="truncate-end">
+            Pacing YouTube to stay under its limit
           </Text>
         </Box>
       ) : null}

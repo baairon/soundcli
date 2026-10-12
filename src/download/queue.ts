@@ -88,6 +88,8 @@ export interface QueueStats {
   failingSource: string | null;
   /** Playlists are still being listed, so more tracks may land any moment. */
   gathering: boolean;
+  /** YouTube rows are waiting out the pacing gap, not stuck. */
+  pacing: boolean;
   /** Share of the batch settled (saved or failed); canceled never fills it. */
   overallPercent: number;
   /** Rough, self-correcting estimate of seconds left for the whole batch. */
@@ -161,6 +163,32 @@ export function blockedBackoffMs(
 ): number {
   const [lo, hi] = BLOCKED_WAITS[Math.min(attempt, BLOCKED_WAITS.length - 1)]!;
   return Math.round(lo + random() * (hi - lo));
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * YouTube's budget. yt-dlp documents about 300 videos an hour for a guest
+ * session and asks for 5 to 10 seconds between downloads; three workers on
+ * short sleeps run several times past that on any batch big enough to matter,
+ * and the platform answers with a block that stalls everything.
+ *
+ * So a burst, then a steady gap: the first downloads in any hour start
+ * unpaced, which keeps one song or one album as quick as ever, and past that
+ * each start waits out the gap. 30 plus one every 15 seconds is 270 in the
+ * first hour. Read at runtime so tests can shrink both.
+ */
+function youtubeBurst(): number {
+  return Number(process.env.SOUNDCLI_YT_BURST ?? 30);
+}
+
+function youtubeGapMs(): number {
+  return Number(process.env.SOUNDCLI_YT_GAP_MS ?? 15_000);
+}
+
+/** Spotify resolves and downloads through YouTube, so it spends that budget. */
+function isYoutubeBacked(source: SourceId): boolean {
+  return source === "youtube" || source === "spotify";
 }
 
 /**
@@ -264,6 +292,10 @@ export class DownloadQueue extends EventEmitter {
    * short cooldown into a batch of failures.
    */
   private blockedUntilSuccess = false;
+  /** Start times of YouTube-backed downloads in the trailing hour, oldest first. */
+  private youtubeStarts: number[] = [];
+  /** Wakes pump() when the pacing gap closes with only YouTube work waiting. */
+  private paceTimer: ReturnType<typeof setTimeout> | null = null;
   /** Consecutive permanent (dead-track) failures, per source label. */
   private permanentStreaks = new Map<string, number>();
   /**
@@ -338,6 +370,7 @@ export class DownloadQueue extends EventEmitter {
     let canceled = this.clearedCanceled;
     let downloading = 0;
     let pending = 0;
+    let youtubePending = 0;
     let paused = 0;
     for (const i of this.items) {
       if (i.status === "done") done++;
@@ -347,8 +380,10 @@ export class DownloadQueue extends EventEmitter {
         if (!isPermanentTrackError(i.error ?? "")) retryable++;
       } else if (i.status === "canceled") canceled++;
       else if (i.status === "downloading") downloading++;
-      else if (i.status === "pending") pending++;
-      else if (i.status === "paused") paused++;
+      else if (i.status === "pending") {
+        pending++;
+        if (this.spendsYoutubeBudget(i)) youtubePending++;
+      } else if (i.status === "paused") paused++;
     }
     const total =
       this.items.length +
@@ -357,6 +392,10 @@ export class DownloadQueue extends EventEmitter {
       this.clearedFailed +
       this.clearedCanceled;
     const finished = done + skipped + failed + canceled;
+    const eta = this.estimateEta(finished, downloading, pending);
+    // The pacing gap is a known wait, not a guess: a long YouTube batch can't
+    // finish sooner than its gaps add up to, however quick the burst looked.
+    const paced = this.pacedSecondsLeft(youtubePending);
     return {
       total,
       inputTotal: this.batchInputTotal || total,
@@ -377,12 +416,21 @@ export class DownloadQueue extends EventEmitter {
       gathering:
         this.gatherController !== null &&
         !this.gatherController.signal.aborted,
+      // The timer can outlive the rows it was set for (a pause, a cancel).
+      pacing: this.paceTimer !== null && pending > 0,
       // Floored, so a stopped batch never rounds up to a full bar.
       overallPercent: total
         ? Math.floor(((done + skipped + failed) / total) * 100)
         : 0,
-      etaSeconds: this.estimateEta(finished, downloading, pending),
+      etaSeconds: paced > 0 ? Math.max(eta ?? 0, paced) : eta,
     };
+  }
+
+  /** Seconds the pacing gap alone needs to clear the YouTube rows waiting. */
+  private pacedSecondsLeft(youtubePending: number): number {
+    this.youtubeWaitMs(); // drops starts that have aged out of the hour
+    const unpaced = Math.max(0, youtubeBurst() - this.youtubeStarts.length);
+    return (Math.max(0, youtubePending - unpaced) * youtubeGapMs()) / 1000;
   }
 
   /**
@@ -524,6 +572,7 @@ export class DownloadQueue extends EventEmitter {
     this.consecutiveErrors = 0;
     this.blockedUntilSuccess = false;
     this.runStartedAt = null;
+    this.clearPaceTimer();
     this.emit("update");
     this.scheduleSave();
   }
@@ -596,6 +645,7 @@ export class DownloadQueue extends EventEmitter {
     this.rateLimitReason = reason;
     this.stopped = true;
     this.consecutiveErrors = 0;
+    this.clearPaceTimer();
     for (const i of this.items) {
       if (i.status === "pending") {
         i.status = "paused";
@@ -784,6 +834,7 @@ export class DownloadQueue extends EventEmitter {
    */
   suspend(): void {
     this.stopped = true;
+    this.clearPaceTimer();
     for (const c of this.controllers.values()) c.abort();
     try {
       saveQueueSync(this.items);
@@ -802,6 +853,7 @@ export class DownloadQueue extends EventEmitter {
     this.rateLimitReason = "";
     this.consecutiveErrors = 0;
     this.pausing.clear();
+    this.clearPaceTimer();
     // Stop the UI's in-flight playlist enumeration from re-feeding the queue.
     this.gatherController?.abort();
     for (const item of this.items) {
@@ -992,13 +1044,62 @@ export class DownloadQueue extends EventEmitter {
     return { total: inputs.length, added, skipped, alreadySaved, newTracks };
   }
 
+  /** Milliseconds until the next YouTube-backed download may start; 0 is now. */
+  private youtubeWaitMs(now = Date.now()): number {
+    while (
+      this.youtubeStarts.length > 0 &&
+      now - this.youtubeStarts[0]! >= HOUR_MS
+    ) {
+      this.youtubeStarts.shift();
+    }
+    if (this.youtubeStarts.length < youtubeBurst()) return 0;
+    const last = this.youtubeStarts[this.youtubeStarts.length - 1]!;
+    return Math.max(0, last + youtubeGapMs() - now);
+  }
+
+  /**
+   * Whether starting this item spends YouTube budget. A track already in the
+   * library only copies a local file, so it never waits and never counts.
+   */
+  private spendsYoutubeBudget(item: QueueItem): boolean {
+    return (
+      isYoutubeBacked(item.source) &&
+      !this.library.has(libId(item.source, item.track.id, item.track.owner))
+    );
+  }
+
+  private clearPaceTimer(): void {
+    if (!this.paceTimer) return;
+    clearTimeout(this.paceTimer);
+    this.paceTimer = null;
+  }
+
   private pump(): void {
     if (this.stopped) return;
     // Only gates new starts: whatever is already running is left alone.
     const limit = this.blockedUntilSuccess ? 1 : Math.max(1, this.concurrency);
     while (this.active < limit) {
-      const next = this.items.find((i) => i.status === "pending");
-      if (!next) break;
+      const wait = this.youtubeWaitMs();
+      const next = this.items.find(
+        (i) =>
+          i.status === "pending" && (wait === 0 || !this.spendsYoutubeBudget(i)),
+      );
+      if (!next) {
+        // Only paced YouTube work is left: come back when the gap closes.
+        // Not unref'd, because a run with no dashboard has to stay alive on it.
+        if (
+          wait > 0 &&
+          !this.paceTimer &&
+          this.items.some((i) => i.status === "pending")
+        ) {
+          this.paceTimer = setTimeout(() => {
+            this.paceTimer = null;
+            this.pump();
+          }, wait);
+          this.emit("update");
+        }
+        break;
+      }
       void this.run(next);
     }
   }
@@ -1134,6 +1235,7 @@ export class DownloadQueue extends EventEmitter {
       this.runFinishedBaseline = this.stats().finished;
     }
     this.active++;
+    if (isYoutubeBacked(item.source)) this.youtubeStarts.push(Date.now());
     item.status = "downloading";
     this.emit("update");
     this.scheduleSave();
@@ -1217,7 +1319,14 @@ export class DownloadQueue extends EventEmitter {
       if (res.status === "ratelimited") {
         // Don't fail it: keep it (with its .part) and pause the whole queue.
         item.status = "paused";
-        this.onRateLimited(res.reason === "botgate" ? BOT_GATE : RATE_LIMITED);
+        const reason = res.reason === "botgate" ? BOT_GATE : RATE_LIMITED;
+        // The only trace a rate limit leaves: the track never fails, so
+        // without this line the log cannot say how often a platform stopped us.
+        this.logFailure(
+          item,
+          `queue halted (${reason}): ${res.detail ?? "no detail"}`,
+        );
+        this.onRateLimited(reason);
       } else if (res.status === "canceled") {
         // Distinguish a pause (keep it, resumable) from a real cancel.
         item.status = this.pausing.has(item.id) ? "paused" : "canceled";
@@ -1315,7 +1424,12 @@ export class DownloadQueue extends EventEmitter {
         this.blockedUntilSuccess = true;
       }
       if (this.consecutiveErrors >= failureStreakLimit() && !this.rateLimited) {
-        this.onRateLimited(streakReason(item.error));
+        const reason = streakReason(item.error);
+        this.logFailure(
+          item,
+          `queue halted (${reason}) after ${this.consecutiveErrors} failures in a row`,
+        );
+        this.onRateLimited(reason);
       }
       if (
         isPermanentTrackError(item.error) &&

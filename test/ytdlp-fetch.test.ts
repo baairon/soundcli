@@ -9,6 +9,7 @@ import {
   resolvedYtDlpPath,
   ytDlpPath,
 } from "../src/bin/ytdlp-fetch";
+import { LATEST_URL } from "../src/bin/ytdlp-update";
 import { USER_AGENT, type FetchImpl } from "../src/util/net";
 
 describe("detectSystemYtDlp", () => {
@@ -128,6 +129,24 @@ describe("downloadYtDlp", () => {
       expect(seenUA).toBe(USER_AGENT);
       const onDisk = await fs.readFile(dest);
       expect(onDisk.length).toBe(3);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("downloads from the nightly channel the update check reads", async () => {
+    // Checking one channel and downloading the other would look out of date
+    // on every launch and re-download forever.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-yt-"));
+    let seenUrl = "";
+    const impl: FetchImpl = async (url) => {
+      seenUrl = url;
+      return new Response(new Uint8Array([1]));
+    };
+    try {
+      await downloadYtDlp(path.join(dir, "yt-dlp-channel"), impl);
+      expect(LATEST_URL).toContain("yt-dlp/yt-dlp-nightly-builds");
+      expect(seenUrl.startsWith(`${LATEST_URL}/download/yt-dlp`)).toBe(true);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

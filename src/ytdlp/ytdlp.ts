@@ -165,6 +165,8 @@ export interface DownloadResult {
   meta?: TrackMeta;
   /** Set with status "ratelimited". */
   reason?: StopReason;
+  /** Set with status "ratelimited": what the platform said, for the log. */
+  detail?: string;
 }
 
 /**
@@ -304,7 +306,7 @@ export async function downloadTrack(
   if (result.exitCode !== 0) {
     const msg = errLines.slice(-5).join(" | ");
     const stop = stopReasonFor(msg);
-    if (stop) return { status: "ratelimited", reason: stop };
+    if (stop) return { status: "ratelimited", reason: stop, detail: msg };
     throw new Error(`yt-dlp failed (exit ${result.exitCode}): ${msg}`);
   }
   if (meta) {
