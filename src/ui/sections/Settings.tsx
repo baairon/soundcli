@@ -44,11 +44,10 @@ type Mode =
   | "soundcloud"
   | "spotify"
   | "format"
-  | "convert-format"
   | "folder"
   | "folder-confirm"
   | "moving"
-  | "convert-confirm"
+  | "format-apply"
   | "converting"
   | "convert-done"
   | "wipe-all";
@@ -90,9 +89,8 @@ export function Settings() {
   const convertAbort = useRef<AbortController | null>(null);
   const convertStart = useRef(0);
   const format = config.audioFormat ?? DEFAULT_AUDIO_FORMAT;
-  // What a conversion is aiming at. It starts as the download format but the
-  // Convert page picks it, so "make my library mp3" is one action from one
-  // place instead of a setting you have to change first.
+  // The format just picked on the Format page, which the next page either
+  // saves for new downloads or also converts the library to.
   const [convertTarget, setConvertTarget] = useState<AudioFormat>(format);
   /** Songs a conversion to `target` would actually touch. */
   const pending = (target: AudioFormat): Track[] =>
@@ -101,7 +99,7 @@ export function Settings() {
   useQueueItems(queue);
 
   const entries: {
-    value: Mode | "open-folder" | "convert";
+    value: Mode | "open-folder";
     name: string;
     detail: string;
     set?: boolean;
@@ -133,17 +131,10 @@ export function Settings() {
     },
     {
       value: "format",
-      name: "Download format",
+      name: "Format",
       detail: format,
       set: true,
       gap: true,
-    },
-    {
-      value: "convert",
-      name: "Convert library",
-      detail: library.all().length
-        ? "Re-encode to another format"
-        : "No songs yet",
     },
     {
       value: "open-folder",
@@ -164,7 +155,8 @@ export function Settings() {
     },
   ];
 
-  function openSetting(v: Mode | "open-folder" | "convert"): void {
+  function openSetting(v: Mode | "open-folder"): void {
+    setMenuNote(null);
     if (v === "open-folder") {
       // The folder may not exist yet (fresh install, edited path): create it
       // first so the file manager always lands somewhere real.
@@ -172,17 +164,6 @@ export function Settings() {
         .mkdir(config.libraryDir, { recursive: true })
         .catch(() => {})
         .then(() => openPath(config.libraryDir));
-      return;
-    }
-    if (v === "convert") {
-      // An empty library has nothing to aim at.
-      if (library.all().length === 0) return;
-      setMenuNote(null);
-      // Start on the first format that is not the one they already have,
-      // since picking the current one is usually a no-op.
-      const first = AUDIO_FORMATS.findIndex((f) => f.id !== format);
-      setFormatCursor(Math.max(0, first));
-      setMode("convert-format");
       return;
     }
     if (v === "format") {
@@ -248,8 +229,15 @@ export function Settings() {
     { isActive: focused && mode === "converting" },
   );
 
-  // Both format pages are the same small list, with the menu's movement; only
-  // what ↵ does differs.
+  /** Point new downloads at `target` and say so on the menu. */
+  function saveFormat(target: AudioFormat): void {
+    setConfig({ ...config, audioFormat: target });
+    setMenuNote(`Saved. New downloads will be ${target}.`);
+    setMode("menu");
+  }
+
+  // The menu's movement. ↵ only asks a second question when there are songs a
+  // conversion would touch; otherwise the pick simply saves.
   useInput(
     (_input, key) => {
       if (key.upArrow)
@@ -258,22 +246,17 @@ export function Settings() {
         setFormatCursor((c) => wrapStep(c, 1, AUDIO_FORMATS.length));
       else if (key.return) {
         const chosen = AUDIO_FORMATS[formatCursor]?.id ?? DEFAULT_AUDIO_FORMAT;
-        if (mode === "format") {
-          setConfig({ ...config, audioFormat: chosen });
+        if (pending(chosen).length > 0) {
+          setConvertTarget(chosen);
+          setMode("format-apply");
+        } else if (chosen !== format) {
+          saveFormat(chosen);
+        } else {
           setMode("menu");
-          return;
         }
-        // Converting: say so instead of opening a confirm for no work.
-        if (pending(chosen).length === 0) {
-          setMenuNote(`Everything is already ${chosen}.`);
-          setMode("menu");
-          return;
-        }
-        setConvertTarget(chosen);
-        setMode("convert-confirm");
       }
     },
-    { isActive: focused && (mode === "format" || mode === "convert-format") },
+    { isActive: focused && mode === "format" },
   );
 
   // Every settings sub-page is rendered through frame(), so the hint line
@@ -326,6 +309,9 @@ export function Settings() {
       const handle = persistableHandle(source, raw);
       if (handle !== undefined || !raw.trim()) {
         setConfig({ ...config, [key]: handle });
+        if (handle !== config[key]) {
+          setMenuNote(handle === undefined ? "Cleared." : "Saved.");
+        }
       }
     });
   }
@@ -469,11 +455,10 @@ export function Settings() {
     })();
   }
 
-  if (mode === "format" || mode === "convert-format") {
-    const converting = mode === "convert-format";
+  if (mode === "format") {
     const nameW = Math.max(...AUDIO_FORMATS.map((f) => f.id.length));
     return frame(
-      converting ? "Convert library" : "Download format",
+      "Format",
       <Box flexDirection="column">
         {AUDIO_FORMATS.map((f, i) => {
           const active = i === formatCursor && focused;
@@ -490,72 +475,72 @@ export function Settings() {
               >
                 {f.id.padEnd(nameW)}
               </Text>
-              <Text dimColor>
-                {`   ${converting && current ? "current" : f.detail}`}
+              <Text dimColor wrap="truncate-end">
+                {`   ${f.detail}${current ? `  ${ICON.dot}  current` : ""}`}
               </Text>
             </Box>
           );
         })}
-        {converting ? null : (
-          <Box marginTop={1}>
-            <Text dimColor wrap="truncate-end">
-              {"Applies to new downloads. Songs you already have keep theirs."}
-            </Text>
-          </Box>
-        )}
+        <Box marginTop={1}>
+          <Text dimColor wrap="truncate-end">
+            {"Songs you already have can be converted on the next step."}
+          </Text>
+        </Box>
       </Box>,
       `↑↓ Move  ${ICON.dot}  ↵ Choose  ${ICON.dot}  esc Back`,
     );
   }
 
-  if (mode === "convert-confirm") {
+  if (mode === "format-apply") {
+    // Converting rewrites files a running download may be landing next to;
+    // pointing new downloads elsewhere touches nothing, so only that waits.
     const busy = queue.activeCount > 0;
+    const switching = convertTarget !== format;
     const songs = pending(convertTarget);
+    const count = `${songs.length} song${songs.length === 1 ? "" : "s"}`;
     const size = formatBytes(songs.reduce((n, t) => n + (t.fileSize ?? 0), 0));
+    const options = [
+      { label: "‹ Cancel", value: "cancel" },
+      ...(switching ? [{ label: "New downloads only", value: "save" }] : []),
+      ...(busy
+        ? []
+        : [
+            {
+              label: `Convert ${count}${switching ? " too" : ""}`,
+              value: "convert",
+            },
+          ]),
+    ];
     return frame(
-      `Convert to ${convertTarget}?`,
+      switching ? `Switch to ${convertTarget}?` : `Convert to ${convertTarget}?`,
       <Box flexDirection="column">
-        {busy ? (
-          <Text color={COLOR.bad}>
-            Downloads are running. Wait for them to finish first.
+        <Box marginBottom={1} flexDirection="column">
+          <Text dimColor>
+            {`${ICON.dot} ${count} in another format${size ? ` · ${size}` : ""}`}
           </Text>
-        ) : (
-          <>
-            <Box marginBottom={1} flexDirection="column">
-              <Text dimColor>
-                {`${ICON.dot} ${songs.length} song${
-                  songs.length === 1 ? "" : "s"
-                }${size ? ` · ${size}` : ""}`}
-              </Text>
+          {busy ? (
+            <Text color={COLOR.bad}>
+              {"Downloads are running. Converting waits for them to finish."}
+            </Text>
+          ) : (
+            <>
               <Text dimColor>{`${ICON.dot} Replaced where they already live`}</Text>
               <Text dimColor>{`${ICON.dot} Re-encoded, which can't be undone`}</Text>
-              {convertTarget !== format ? (
-                <Text dimColor>
-                  {`${ICON.dot} New downloads will be ${convertTarget} too`}
-                </Text>
-              ) : null}
-            </Box>
-            <Select
-              isDisabled={!focused}
-              options={[
-                { label: "‹ Cancel", value: "cancel" },
-                { label: "Convert everything", value: "confirm" },
-              ]}
-              onChange={(v) => {
-                // A download may have started while the page sat open.
-                if (v !== "confirm" || queue.activeCount > 0) {
-                  setMode("menu");
-                  return;
-                }
-                runConvert();
-              }}
-            />
-          </>
-        )}
+            </>
+          )}
+        </Box>
+        <Select
+          isDisabled={!focused}
+          options={options}
+          onChange={(v) => {
+            if (v === "save") saveFormat(convertTarget);
+            // A download may have started while the page sat open.
+            else if (v === "convert" && queue.activeCount === 0) runConvert();
+            else setMode("menu");
+          }}
+        />
       </Box>,
-      busy
-        ? "esc Back"
-        : `↑↓ Move  ${ICON.dot}  ↵ Choose  ${ICON.dot}  esc Back`,
+      `↑↓ Move  ${ICON.dot}  ↵ Choose  ${ICON.dot}  esc Back`,
     );
   }
 

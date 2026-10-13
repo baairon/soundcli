@@ -111,7 +111,7 @@ const wrap = (node: ReactNode, store: Store) => (
   <StoreContext.Provider value={store}>{node}</StoreContext.Provider>
 );
 
-/** Menu → Convert library → pick mp3 → confirm → run. */
+/** Menu, Format, pick mp3, convert the songs too, run. */
 async function convertToMp3(
   stdin: { write: (s: string) => void },
   lastFrame: () => string | undefined,
@@ -120,17 +120,21 @@ async function convertToMp3(
   for (
     let i = 0;
     i < 20 &&
-    !(lastFrame() ?? "").includes(`${ICON.pointer} Convert library`);
+    !(lastFrame() ?? "").includes(`${ICON.pointer} Format`);
     i++
   ) {
     stdin.write(DOWN);
     await tick();
   }
-  stdin.write(ENTER); // open the picker, cursor already on mp3
+  stdin.write(ENTER); // open the picker, cursor on the current m4a
   await tick();
-  stdin.write(ENTER); // choose mp3
+  stdin.write(DOWN); // mp3
   await tick();
-  stdin.write(DOWN); // off Cancel, onto Convert everything
+  stdin.write(ENTER);
+  await tick();
+  stdin.write(DOWN); // off Cancel, past New downloads only
+  await tick();
+  stdin.write(DOWN); // onto Convert N songs too
   await tick();
   stdin.write(ENTER);
   // The run is asynchronous; the result screen is the signal that it finished,

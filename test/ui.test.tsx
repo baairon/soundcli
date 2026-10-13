@@ -107,15 +107,14 @@ describe("single-page sections render", () => {
     expect(frame).toContain("YouTube");
   });
 
-  it("settings shows the music folder and the download format", () => {
+  it("settings shows the music folder and the format", () => {
     const store = makeStore();
     const { lastFrame } = render(wrap(<Settings />, store));
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Open music folder");
-    expect(frame).toContain("Download format");
-    // This store's library is empty, so there is nothing to aim a conversion
-    // at and the row says so rather than offering the work.
-    expect(frame).toContain("No songs yet");
+    expect(frame).toMatch(/Format\s+m4a/);
+    // Converting lives behind the Format row now, not on a row of its own.
+    expect(frame).not.toContain("Convert library");
   });
 
   it("settings shows values inline after the label column", () => {
@@ -521,56 +520,90 @@ async function openMenuRow(
   await tick();
 }
 
-describe("settings convert library", () => {
+describe("settings format", () => {
   /** Placeholder tracks are all .mp3, so m4a and opus both have work to do. */
-  const withSongs = () => makeStore({ library: makeFakeLibrary() });
+  const withSongs = (saved: string[] = []) =>
+    makeStore({
+      library: makeFakeLibrary(),
+      setConfig: (c) => saved.push(c.audioFormat ?? ""),
+    });
 
-  it("opens its own format picker instead of inheriting the download format", async () => {
+  it("opens on the current format and marks it", async () => {
     const { stdin, lastFrame } = render(wrap(<Settings />, withSongs()));
-    await openMenuRow(stdin, lastFrame, "Convert library");
+    await openMenuRow(stdin, lastFrame, "Format");
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("Convert library");
-    // The configured download format is marked rather than described, and the
-    // cursor starts on a format that would actually do something.
-    expect(frame).toContain("current");
-    expect(frame).toContain(`${ICON.pointer} mp3`);
+    expect(frame).toContain(`${ICON.pointer} m4a`);
+    expect(frame).toMatch(/m4a .*current/);
   });
 
-  it("says so instead of opening an empty confirm", async () => {
-    const { stdin, lastFrame } = render(wrap(<Settings />, withSongs()));
-    await openMenuRow(stdin, lastFrame, "Convert library");
-    // The cursor sits on mp3 and every placeholder track is already mp3.
-    stdin.write("\r");
-    await tick();
-    const frame = lastFrame() ?? "";
-    expect(frame).toContain("Everything is already mp3.");
-    expect(frame).not.toContain("Convert everything");
-  });
-
-  it("warns that the download format moves with the conversion", async () => {
-    const { stdin, lastFrame } = render(wrap(<Settings />, withSongs()));
-    await openMenuRow(stdin, lastFrame, "Convert library");
-    stdin.write(DOWN); // mp3 -> opus, which differs from the m4a setting
+  it("saves straight away when no song would change", async () => {
+    const saved: string[] = [];
+    const { stdin, lastFrame } = render(wrap(<Settings />, withSongs(saved)));
+    await openMenuRow(stdin, lastFrame, "Format");
+    stdin.write(DOWN); // m4a -> mp3, and every placeholder track is mp3
     await tick();
     stdin.write("\r");
     await tick();
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("Convert to opus?");
-    expect(frame).toContain("New downloads will be opus too");
+    expect(saved).toEqual(["mp3"]);
+    expect(frame).toContain("Saved. New downloads will be mp3.");
+    expect(frame).not.toContain("Switch to");
   });
 
-  it("stays quiet when the target already matches the download format", async () => {
+  it("asks whether to convert the songs when switching formats", async () => {
     const { stdin, lastFrame } = render(wrap(<Settings />, withSongs()));
-    await openMenuRow(stdin, lastFrame, "Convert library");
-    stdin.write(DOWN); // mp3 -> opus
+    await openMenuRow(stdin, lastFrame, "Format");
+    stdin.write(DOWN);
     await tick();
-    stdin.write(DOWN); // wraps to m4a, which is the setting already
+    stdin.write(DOWN); // opus
     await tick();
     stdin.write("\r");
+    await tick();
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Switch to opus?");
+    expect(frame).toContain("New downloads only");
+    expect(frame).toContain("Convert 8 songs too");
+  });
+
+  it("switches new downloads only, leaving the songs alone", async () => {
+    const saved: string[] = [];
+    const { stdin, lastFrame } = render(wrap(<Settings />, withSongs(saved)));
+    await openMenuRow(stdin, lastFrame, "Format");
+    stdin.write(DOWN);
+    await tick();
+    stdin.write(DOWN); // opus
+    await tick();
+    stdin.write("\r");
+    await tick();
+    stdin.write(DOWN); // off Cancel, onto New downloads only
+    await tick();
+    stdin.write("\r");
+    // Select reports the pick from an effect, a render after the keypress.
+    for (let i = 0; i < 10 && saved.length === 0; i++) await tick();
+    await tick();
+    expect(saved).toEqual(["opus"]);
+    expect(lastFrame() ?? "").toContain("Saved. New downloads will be opus.");
+  });
+
+  it("offers only the conversion when the format is already set", async () => {
+    const { stdin, lastFrame } = render(wrap(<Settings />, withSongs()));
+    await openMenuRow(stdin, lastFrame, "Format");
+    stdin.write("\r"); // m4a, the setting, with every song still mp3
     await tick();
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Convert to m4a?");
-    expect(frame).not.toContain("New downloads will be");
+    expect(frame).toContain("Convert 8 songs");
+    expect(frame).not.toContain("New downloads only");
+  });
+
+  it("says a handle was saved", async () => {
+    const { stdin, lastFrame } = render(wrap(<Settings />, withSongs()));
+    await openMenuRow(stdin, lastFrame, "YouTube handle");
+    stdin.write("someone");
+    await tick();
+    stdin.write("\r");
+    await tick();
+    expect(lastFrame() ?? "").toContain("Saved.");
   });
 });
 
