@@ -50,7 +50,7 @@ soundcli can also download without opening anything, which is what you want from
 npx sndcli add https://soundcloud.com/artist/track
 ```
 
-It is the same downloader the dashboard uses, so everything above still holds: songs land in the same folders, nothing downloads twice, and a run that gets cut off picks up where it left off next time.
+It is the same downloader the dashboard uses, so everything above still holds: songs land in the same folders, nothing downloads twice, and a run that gets cut off picks up where it left off next time. The links you pass go first, ahead of anything an earlier session left unfinished.
 
 A link can be a single song, a playlist, an album, or a SoundCloud likes page. A whole profile is a lot of music to pull in by accident, so `add` only takes one when you add `--all`:
 
@@ -58,7 +58,7 @@ A link can be a single song, a playlist, an album, or a SoundCloud likes page. A
 npx sndcli add https://soundcloud.com/artist --all
 ```
 
-If soundcli is already open, `add` hands the links to it and returns right away, and the songs show up in its Download section. If you open soundcli while an `add` is still running in the background, that run saves its place and steps aside, and the dashboard carries on with the same downloads.
+If soundcli is already open, `add` hands the links to it and returns once it has them, usually within a couple of seconds, and the songs show up in its Download section. If you open soundcli while an `add` is still running in the background, that run saves its place and steps aside, and the dashboard carries on with the same downloads.
 
 Run the same line on a schedule to keep a playlist or your likes in step. Each run only fetches what is new.
 
@@ -73,7 +73,7 @@ With `--json`, every line of output is one JSON object:
 | `handoff` | The links went to a soundcli that was already running | `owner` (`tui` for the dashboard, `headless` for another `add`) |
 | `done` | The run is over | `saved`, `exists`, `failed`, `halted`, `exit` |
 
-`halted` is `null` unless the run stopped early, and then it names the reason. Setup messages go to stderr, so stdout carries nothing but these lines.
+`done` is always the last line, after a `handoff` too. `halted` is `null` unless the run stopped early, and then it names the reason. Setup messages go to stderr, so stdout carries nothing but these lines.
 
 The exit code says how it ended:
 
@@ -84,6 +84,7 @@ The exit code says how it ended:
 | 2 | The command was wrong: no link, an unknown option, or a profile without `--all`. |
 | 75 | Stopped early with its place saved, because the site started refusing downloads or the dashboard took over. Run it again later. |
 | 130 | Interrupted with Ctrl+C, with its place saved. |
+| 143 | Killed by another program, with its place saved. |
 
 ## Contributing
 

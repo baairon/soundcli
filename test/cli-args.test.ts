@@ -88,6 +88,13 @@ describe("parseCliArgs add", () => {
     });
   });
 
+  it("answers --help after add with the help, not a usage error", () => {
+    expect(parseCliArgs(["add", "--help"])).toEqual({ kind: "help" });
+    expect(parseCliArgs(["add", "https://youtu.be/abc123", "-h"])).toEqual({
+      kind: "help",
+    });
+  });
+
   it("help text documents add", () => {
     expect(HELP_TEXT).toContain("soundcli add <link>...");
     expect(HELP_TEXT).toContain("--all");

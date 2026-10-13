@@ -15,6 +15,7 @@ function parseAdd(rest: string[]): CliCommand {
   let all = false;
   let json = false;
   for (const a of rest) {
+    if (a === "--help" || a === "-h") return { kind: "help" };
     if (a === "--all") all = true;
     else if (a === "--json") json = true;
     else if (a.startsWith("-")) return { kind: "invalid", arg: a, inAdd: true };
