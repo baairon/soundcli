@@ -23,6 +23,19 @@ export interface PersistedItem {
 interface QueueSnapshot {
   version: 1;
   items: PersistedItem[];
+  /** Absent in a file written before the pacing budget was saved. */
+  youtubeStarts?: number[];
+}
+
+/** What a saved queue brings back. */
+export interface SavedQueue {
+  items: PersistedItem[];
+  /**
+   * When recent YouTube-backed downloads started. Saved so the pacing budget
+   * outlives the process: otherwise every `sndcli add` and every relaunch
+   * would open with a full burst.
+   */
+  youtubeStarts: number[];
 }
 
 /**
@@ -79,34 +92,44 @@ export function restorableItems(
   );
 }
 
-export async function saveQueue(items: QueueItem[]): Promise<void> {
+function snapshot(items: QueueItem[], youtubeStarts: number[]): string {
+  const all: QueueSnapshot = { version: 1, items: snapshotItems(items), youtubeStarts };
+  return JSON.stringify(all, null, 2);
+}
+
+export async function saveQueue(
+  items: QueueItem[],
+  youtubeStarts: number[],
+): Promise<void> {
   // The suite runs real queues, and every one of them would otherwise
   // overwrite the user's own saved queue with its fixtures.
   if (process.env.VITEST) return;
-  const snapshot: QueueSnapshot = { version: 1, items: snapshotItems(items) };
   await fs.mkdir(path.dirname(queueFile), { recursive: true });
   const tmp = `${queueFile}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(snapshot, null, 2), "utf8");
+  await fs.writeFile(tmp, snapshot(items, youtubeStarts), "utf8");
   await fs.rename(tmp, queueFile);
 }
 
 /** Synchronous save for app quit, so a partial download survives even on exit. */
-export function saveQueueSync(items: QueueItem[]): void {
+export function saveQueueSync(items: QueueItem[], youtubeStarts: number[]): void {
   if (process.env.VITEST) return;
-  const snapshot: QueueSnapshot = { version: 1, items: snapshotItems(items) };
   mkdirSync(path.dirname(queueFile), { recursive: true });
-  writeFileSync(queueFile, JSON.stringify(snapshot, null, 2), "utf8");
+  writeFileSync(queueFile, snapshot(items, youtubeStarts), "utf8");
 }
 
-export async function loadQueue(): Promise<PersistedItem[]> {
+export async function loadQueue(): Promise<SavedQueue> {
   try {
     const raw = await fs.readFile(queueFile, "utf8");
     const parsed = JSON.parse(raw) as QueueSnapshot;
     if (parsed && parsed.version === 1 && Array.isArray(parsed.items)) {
-      return parsed.items;
+      const starts = parsed.youtubeStarts;
+      return {
+        items: parsed.items,
+        youtubeStarts: Array.isArray(starts) ? starts : [],
+      };
     }
   } catch {
     // missing or invalid: nothing to restore
   }
-  return [];
+  return { items: [], youtubeStarts: [] };
 }

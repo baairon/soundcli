@@ -42,6 +42,7 @@ export async function gatherLists(
   adapter: SourceAdapter,
   lists: SourcePlaylist[],
   onProgress?: (done: number, total: number) => void,
+  opts: { front?: boolean } = {},
 ): Promise<GatherResult> {
   const result = emptyResult();
   const signal = queue.beginGather();
@@ -61,6 +62,7 @@ export async function gatherLists(
               sourceLabel: adapter.label,
               track: t,
             })),
+            opts,
           );
           result.total += r.total;
           result.added += r.added;
@@ -93,6 +95,7 @@ export async function gatherLists(
 export async function enqueueTarget(
   queue: DownloadQueue,
   target: Extract<LinkTarget, { ok: true }>,
+  opts: { front?: boolean } = {},
 ): Promise<GatherResult> {
   try {
     if (target.kind === "track") {
@@ -106,6 +109,7 @@ export async function enqueueTarget(
           sourceLabel: SOURCE_LABELS[target.source],
           track: t,
         })),
+        opts,
       );
       return {
         total: r.total,
@@ -127,7 +131,7 @@ export async function enqueueTarget(
     if (picked.length === 0) {
       return { ...emptyResult(), firstError: "Nothing public to download there." };
     }
-    return await gatherLists(queue, adapter, picked);
+    return await gatherLists(queue, adapter, picked, undefined, opts);
   } catch (e) {
     return {
       ...emptyResult(),

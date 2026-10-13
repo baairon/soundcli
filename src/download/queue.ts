@@ -22,7 +22,7 @@ import {
   restorableItems,
   saveQueue,
   saveQueueSync,
-  type PersistedItem,
+  type SavedQueue,
 } from "./persist";
 
 export type QueueStatus =
@@ -56,6 +56,8 @@ export interface QueueItem {
    * last attempt's stale percent read as a hang for all of it.
    */
   retrying?: boolean;
+  /** Queued ahead of the line (see enqueue's `front`). */
+  front?: boolean;
 }
 
 export interface EnqueueInput {
@@ -179,11 +181,14 @@ const HOUR_MS = 60 * 60 * 1000;
  * first hour. Read at runtime so tests can shrink both.
  */
 function youtubeBurst(): number {
-  return Number(process.env.SOUNDCLI_YT_BURST ?? 30);
+  return Number(process.env.SOUNDCLI_YT_BURST ?? 30) || 30;
 }
 
+// Neither may be NaN: a NaN wait is not "start now" and not "come back
+// later", so YouTube rows would sit forever.
 function youtubeGapMs(): number {
-  return Number(process.env.SOUNDCLI_YT_GAP_MS ?? 15_000);
+  const ms = Number(process.env.SOUNDCLI_YT_GAP_MS ?? 15_000);
+  return Number.isNaN(ms) ? 15_000 : ms;
 }
 
 /** Spotify resolves and downloads through YouTube, so it spends that budget. */
@@ -311,8 +316,9 @@ export class DownloadQueue extends EventEmitter {
    * streaming their tracks in via enqueue). Cancelling/clearing the queue trips
    * it so a still-running enumeration of a *canceled* batch can't keep feeding
    * (and reviving) the queue. A fresh Add starts a new, un-aborted session.
+   * Several can run at once: a hand-off can overlap an Add.
    */
-  private gatherController: AbortController | null = null;
+  private readonly gathers = new Map<AbortSignal, AbortController>();
   /**
    * trackSignature of every library entry, for the cross-source "same song"
    * dedupe. A full library walk per enqueue call is quadratic on a
@@ -338,7 +344,7 @@ export class DownloadQueue extends EventEmitter {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void saveQueue(this.items).catch(() => {});
+      void saveQueue(this.items, this.youtubeStarts).catch(() => {});
     }, 300);
   }
 
@@ -413,9 +419,7 @@ export class DownloadQueue extends EventEmitter {
       rateLimited: this.rateLimited,
       rateLimitReason: this.rateLimitReason,
       failingSource: this.failingSource,
-      gathering:
-        this.gatherController !== null &&
-        !this.gatherController.signal.aborted,
+      gathering: this.gathers.size > 0,
       // The timer can outlive the rows it was set for (a pause, a cancel).
       pacing: this.paceTimer !== null && pending > 0,
       // Floored, so a stopped batch never rounds up to a full bar.
@@ -552,7 +556,7 @@ export class DownloadQueue extends EventEmitter {
 
   /** Empty the entire queue: abort in-flight downloads and drop every item. */
   clearAll(): void {
-    this.gatherController?.abort();
+    this.abortGathers();
     for (const c of this.controllers.values()) c.abort();
     this.controllers.clear();
     this.pausing.clear();
@@ -808,9 +812,14 @@ export class DownloadQueue extends EventEmitter {
     for (const i of this.items) if (i.status === "paused") this.resume(i.id);
   }
 
-  /** Restore a persisted queue from a previous session. */
-  restore(persisted: PersistedItem[]): void {
-    for (const p of restorableItems(persisted, this.library)) {
+  /** Restore a persisted queue from a previous session, pacing budget included. */
+  restore(saved: SavedQueue): void {
+    const now = Date.now();
+    // A start stamped ahead of the clock would never age out, so it goes too.
+    this.youtubeStarts = saved.youtubeStarts
+      .filter((t) => t <= now && now - t < HOUR_MS)
+      .sort((a, b) => a - b);
+    for (const p of restorableItems(saved.items, this.library)) {
       this.items.push({
         id: `q${++counter}`,
         source: p.source,
@@ -828,13 +837,16 @@ export class DownloadQueue extends EventEmitter {
   /**
    * Stop for app quit: kill in-flight children and persist the unfinished queue
    * synchronously (downloading → pending) so it resumes from .part next launch.
+   * `save` is false for a process that lost the library to another one, whose
+   * saved queue this would overwrite.
    */
-  suspend(): void {
+  suspend(save = true): void {
     this.stopped = true;
     this.clearPaceTimer();
     for (const c of this.controllers.values()) c.abort();
+    if (!save) return;
     try {
-      saveQueueSync(this.items);
+      saveQueueSync(this.items, this.youtubeStarts);
     } catch {
       // best effort on exit
     }
@@ -852,7 +864,7 @@ export class DownloadQueue extends EventEmitter {
     this.pausing.clear();
     this.clearPaceTimer();
     // Stop the UI's in-flight playlist enumeration from re-feeding the queue.
-    this.gatherController?.abort();
+    this.abortGathers();
     for (const item of this.items) {
       if (item.status === "pending" || item.status === "paused") {
         item.status = "canceled";
@@ -889,8 +901,9 @@ export class DownloadQueue extends EventEmitter {
    * starts downloads while a canceled batch's stragglers can't revive the queue.
    */
   beginGather(): AbortSignal {
-    this.gatherController = new AbortController();
-    return this.gatherController.signal;
+    const controller = new AbortController();
+    this.gathers.set(controller.signal, controller);
+    return controller.signal;
   }
 
   /**
@@ -898,9 +911,12 @@ export class DownloadQueue extends EventEmitter {
    * batch is not over, however quiet the queue is between two playlists.
    */
   endGather(signal: AbortSignal): void {
-    if (this.gatherController?.signal !== signal) return;
-    this.gatherController = null;
-    this.emit("update");
+    if (this.gathers.delete(signal)) this.emit("update");
+  }
+
+  private abortGathers(): void {
+    for (const controller of this.gathers.values()) controller.abort();
+    this.gathers.clear();
   }
 
   /**
@@ -927,8 +943,11 @@ export class DownloadQueue extends EventEmitter {
    * queue, and same-title/artist matches from other sources. The return tells UI
    * how many were actually added vs skipped as duplicates, while separating
    * already-saved playlist materialization from genuinely new downloads.
+   *
+   * `front` puts the new rows ahead of everything still waiting, for a run with
+   * no dashboard whose own links should not sit behind a restored backlog.
    */
-  enqueue(inputs: EnqueueInput[]): {
+  enqueue(inputs: EnqueueInput[], opts: { front?: boolean } = {}): {
     total: number;
     added: number;
     skipped: number;
@@ -974,6 +993,7 @@ export class DownloadQueue extends EventEmitter {
     // Feed positions to restamp onto already-saved tracks: "download all"
     // re-lists every playlist, so each pass self-heals stored order for free.
     const heals: Track[] = [];
+    const fresh: QueueItem[] = [];
     for (const inp of inputs) {
       const id = libId(inp.source, inp.track.id, inp.track.owner);
       const sig = trackSignature({ ...inp.track, source: inp.source });
@@ -1015,16 +1035,25 @@ export class DownloadQueue extends EventEmitter {
       }
       blocked.add(id);
       signatures.add(sig);
-      this.items.push({
+      fresh.push({
         id: `q${++counter}`,
         source: inp.source,
         sourceLabel: inp.sourceLabel,
         track: inp.track,
         status: "pending",
         percent: 0,
+        front: opts.front,
       });
       added++;
     }
+
+    // Front rows go ahead of the first waiting row that did not ask for the
+    // same, so several links from one caller keep their own order.
+    const waiting = (i: QueueItem): boolean =>
+      !i.front && (i.status === "pending" || i.status === "paused");
+    const at = opts.front ? this.items.findIndex(waiting) : -1;
+    const n = at < 0 ? this.items.length : at;
+    this.items = [...this.items.slice(0, n), ...fresh, ...this.items.slice(n)];
 
     if (heals.length > 0) {
       // One notify + one atomic index write for the whole listing.

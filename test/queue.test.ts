@@ -556,6 +556,27 @@ describe("download queue pause/resume", () => {
     q.cancelAll();
     expect(q.stats().gathering).toBe(false);
   });
+
+  it("tracks overlapping gathers and cancels them together", () => {
+    // A hand-off and the user's own add can be listing at the same time.
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    const first = q.beginGather();
+    q.endGather(q.beginGather());
+    expect(q.stats().gathering).toBe(true);
+    q.cancelAll();
+    expect(first.aborted).toBe(true);
+    expect(q.stats().gathering).toBe(false);
+  });
+
+  it("puts front rows ahead of what is waiting, in the order they came", () => {
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    // "a" starts at once; "b" and "c" are the backlog behind it.
+    q.enqueue([byUrl("a"), byUrl("b"), byUrl("c")]);
+    q.enqueue([byUrl("x"), byUrl("y")], { front: true });
+    q.enqueue([byUrl("z")], { front: true });
+    expect(q.getItems().map((i) => i.track.id).join("")).toBe("axyzbc");
+    q.cancelAll();
+  });
 });
 
 describe("download queue rate limiting", () => {
@@ -746,6 +767,38 @@ describe("download queue YouTube pacing", () => {
     await vi.waitFor(() => expect(q.stats().finished).toBe(2));
     expect(started()).toEqual(["y1"]);
     expect(q.stats().pacing).toBe(false);
+  });
+
+  it("carries the spent budget over from the saved queue", async () => {
+    // Every `sndcli add` and every relaunch is a new process. Counted from
+    // zero each time, a script adding songs one by one would never be paced.
+    process.env.SOUNDCLI_YT_BURST = "2";
+    process.env.SOUNDCLI_YT_GAP_MS = "60000";
+    finishInstantly();
+    const now = Date.now();
+    const spent = new DownloadQueue(defaultConfig, emptyLib(), 3);
+    spent.restore({ items: [], youtubeStarts: [now - 2_000, now - 1_000] });
+    spent.enqueue([byUrl("a")]);
+    // pump() decides inside enqueue, so the hold shows straight away.
+    expect(spent.stats()).toMatchObject({ pending: 1, pacing: true });
+    spent.cancelAll();
+
+    // A start the hour no longer counts, or one stamped ahead of the clock
+    // (which would never age out), is dropped.
+    const fresh = new DownloadQueue(defaultConfig, emptyLib(), 3);
+    fresh.restore({ items: [], youtubeStarts: [now - 7.2e6, now + 3.6e6] });
+    fresh.enqueue([byUrl("b"), byUrl("c")]);
+    await vi.waitFor(() => expect(fresh.stats().done).toBe(2));
+  });
+
+  it("falls back to the defaults when an override is not a number", async () => {
+    // A NaN gap is neither "start now" nor "wait": rows would sit forever.
+    process.env.SOUNDCLI_YT_BURST = "lots";
+    process.env.SOUNDCLI_YT_GAP_MS = "soon";
+    finishInstantly();
+    const q = new DownloadQueue(defaultConfig, emptyLib(), 3);
+    q.enqueue([byUrl("a"), byUrl("b")]);
+    await vi.waitFor(() => expect(q.stats().done).toBe(2));
   });
 });
 
