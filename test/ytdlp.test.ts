@@ -1,5 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { isRateLimitError } from "../src/ytdlp/ytdlp";
+import { describe, it, expect, vi, afterEach } from "vitest";
+
+// The process call is the one thing enumerate reaches outside itself.
+const execaMock = vi.fn();
+vi.mock("execa", () => ({ execa: (...a: unknown[]) => execaMock(...a) }));
+
+import { enumerate, isRateLimitError } from "../src/ytdlp/ytdlp";
 import { isPermanentTrackError } from "../src/download/queue";
 
 describe("isRateLimitError", () => {
@@ -46,5 +51,40 @@ describe("isRateLimitError", () => {
     const bot = "ERROR: [youtube] Sign in to confirm you're not a bot";
     expect(isRateLimitError(bot)).toBe(true);
     expect(isPermanentTrackError(bot)).toBe(false);
+  });
+});
+
+describe("enumerate", () => {
+  const LIKES = "https://soundcloud.com/lumen/likes";
+  const failing = (stderr: string): Error =>
+    Object.assign(new Error("exit 1"), { stderr });
+
+  afterEach(() => {
+    execaMock.mockReset();
+    delete process.env.SOUNDCLI_RETRY_BASE_MS;
+  });
+
+  it("tries a listing again when the site hiccups", async () => {
+    process.env.SOUNDCLI_RETRY_BASE_MS = "0";
+    const blip =
+      "ERROR: 900000001: Unable to download JSON metadata: HTTP Error 500: Internal Server Error";
+    const page = { entries: [{ id: "1", title: "Velvet Signal" }] };
+    execaMock
+      .mockRejectedValueOnce(failing(blip))
+      .mockResolvedValueOnce({ stdout: JSON.stringify(page) });
+    expect((await enumerate(LIKES)).entries).toHaveLength(1);
+    expect(execaMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops after three tries, and at once on an answer that will not change", async () => {
+    process.env.SOUNDCLI_RETRY_BASE_MS = "0";
+    execaMock.mockRejectedValue(failing("ERROR: HTTP Error 502: Bad Gateway"));
+    await expect(enumerate(LIKES)).rejects.toThrow("502");
+    expect(execaMock).toHaveBeenCalledTimes(3);
+
+    execaMock.mockReset();
+    execaMock.mockRejectedValue(failing("ERROR: HTTP Error 404: Not Found"));
+    await expect(enumerate(LIKES)).rejects.toThrow("404");
+    expect(execaMock).toHaveBeenCalledTimes(1);
   });
 });

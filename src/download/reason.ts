@@ -47,3 +47,26 @@ export function shortError(e?: string): string {
     return "network hiccup";
   return "couldn't save";
 }
+
+/**
+ * Whether a failure is the site or the line having a moment (a server error,
+ * a timeout, a dropped connection) rather than an answer that will not change.
+ */
+export function isHiccup(e: string): boolean {
+  return /HTTP Error 5\d\d|timed out|timeout|connection|network|getaddrinfo/i.test(e);
+}
+
+/**
+ * One calm sentence for a listing that failed (a profile, a playlist, a pasted
+ * link), in place of yt-dlp's own line. Anything else reads as it came, minus
+ * the tail yt-dlp repeats, so our own messages stay as written.
+ */
+export function listingError(e: string, site: string): string {
+  if (isHiccup(e)) {
+    return `${site} isn't answering right now. Try again in a moment.`;
+  }
+  if (/HTTP Error 404|does not exist/i.test(e)) {
+    return `Couldn't find that on ${site}. Check the link or handle.`;
+  }
+  return e.split(" (caused by ")[0]!;
+}

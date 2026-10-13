@@ -3,6 +3,7 @@ import { execa } from "execa";
 import { ffmpegPath, jsRuntimeArgs, toolEnv } from "../bin/binaries";
 import { resolvedYtDlpPath } from "../bin/ytdlp-fetch";
 import type { Config } from "../config/config";
+import { isHiccup } from "../download/reason";
 import {
   audioFormatArgs,
   outputTemplate,
@@ -110,14 +111,21 @@ export async function enumerate(
   args.push(url);
 
   let stdout: string;
-  try {
-    ({ stdout } = await execa(resolvedYtDlpPath(), args, { env: toolEnv() }));
-  } catch (e) {
-    // Surface yt-dlp's own "ERROR: ..." line instead of the raw execa dump.
-    const err = e as { stderr?: string };
-    const match = err.stderr?.match(/ERROR:\s*(.+)/);
-    if (match) throw new Error(match[1]?.trim());
-    throw e;
+  // A site answers the odd page with a server error, and yt-dlp retries few
+  // of them: left alone, one blip fails a whole likes feed. Three tries.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      ({ stdout } = await execa(resolvedYtDlpPath(), args, { env: toolEnv() }));
+      break;
+    } catch (e) {
+      // Surface yt-dlp's own "ERROR: ..." line instead of the raw execa dump.
+      const err = e as { stderr?: string };
+      const message = err.stderr?.match(/ERROR:\s*(.+)/)?.[1]?.trim();
+      if (!message) throw e;
+      if (attempt >= 2 || !isHiccup(message)) throw new Error(message);
+      const baseMs = Number(process.env.SOUNDCLI_RETRY_BASE_MS ?? 500);
+      await new Promise((r) => setTimeout(r, baseMs * (attempt + 1)));
+    }
   }
   const data = JSON.parse(stdout) as Record<string, unknown>;
   const entries = data.entries;
