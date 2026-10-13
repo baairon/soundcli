@@ -14,18 +14,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # One push can land several commits, and each has to stand by itself: a
+  # broken one in the middle is what makes a later bisect useless. So the
+  # checks run against every commit a push brings, not only its tip.
+  commits:
+    name: commits in this push
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: list
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          # A pull request is checked as the merge it would make, as before.
+          # So is a first push or a rewritten branch: "before" is no ancestor
+          # there, and nothing says which commits are new.
+          shas=""
+          if [ "$EVENT" = "push" ] && git merge-base --is-ancestor "$BEFORE" "$AFTER" 2>/dev/null; then
+            # Oldest first. The newest twenty at most, to stay well inside
+            # the limit on jobs in one run.
+            shas=$(git rev-list --reverse --max-count=20 "$BEFORE..$AFTER")
+          fi
+          list=""
+          for sha in ${shas:-$AFTER}; do
+            list="$list{\"sha\":\"$sha\",\"short\":\"${sha:0:7}\"},"
+          done
+          echo "list=[${list%,}]" >> "$GITHUB_OUTPUT"
+
   test:
-    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    name: ${{ matrix.commit.short }} · node ${{ matrix.node }} on ${{ matrix.os }}
+    needs: commits
     runs-on: ${{ matrix.os }}
     strategy:
-      # One platform failing should never hide the result on the others.
+      # One platform failing should never hide the result on the others, and
+      # one commit failing should never hide the result on the rest.
       fail-fast: false
       matrix:
+        commit: ${{ fromJson(needs.commits.outputs.list) }}
         os: [ubuntu-latest, macos-latest, windows-latest]
         node: [22, 24]
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.commit.sha }}
 
       - uses: actions/setup-node@v7
         with:
