@@ -7,6 +7,7 @@ import { TextField } from "../components/TextField";
 import { makeYoutube } from "../../sources/youtube";
 import { makeSoundcloud } from "../../sources/soundcloud";
 import { makeSpotify } from "../../sources/spotify/adapter";
+import { gatherLists } from "../../download/gather";
 import { clearPartials } from "../../sources/partials";
 import { mpvInstallHint } from "../../player/playback";
 import { normalizeHandle } from "../../sources/handle";
@@ -194,37 +195,13 @@ export function Welcome() {
     setStep("downloading");
     setGather({ done: 0, total: lists.length });
     clearPartials();
-    let addedAny = false;
-    let gathered = 0;
-    let cursor = 0;
-    const worker = async (): Promise<void> => {
-      while (cursor < lists.length) {
-        const pl = lists[cursor++]!;
-        try {
-          const tracks = await adapter.listTracks(pl);
-          if (tracks.length > 0) {
-            const r = queue.enqueue(
-              tracks.map((t) => ({
-                source: adapter.id,
-                sourceLabel: adapter.label,
-                track: t,
-              })),
-            );
-            if (r.added > 0) addedAny = true;
-          }
-        } catch {
-          // individual list failures are fine, keep going
-        }
-        gathered++;
-        setGather({ done: gathered, total: lists.length });
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(5, lists.length) }, () => worker()),
+    // Individual list failures are fine here: whatever loaded still downloads.
+    const r = await gatherLists(queue, adapter, lists, (done, total) =>
+      setGather({ done, total }),
     );
 
     // Done gathering. Finish onboarding and drop into the download queue.
-    finishOnboarding(addedAny);
+    finishOnboarding(r.added > 0);
   }
 
   function finishOnboarding(hasDownloads = false): void {

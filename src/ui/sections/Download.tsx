@@ -35,6 +35,8 @@ import {
   type QueueItem,
   type QueueStats,
 } from "../../download/queue";
+import { gatherLists } from "../../download/gather";
+import { shortError } from "../../download/reason";
 import { sanitizeName } from "../../ytdlp/args";
 import type { SourceAdapter, SourcePlaylist } from "../../sources/types";
 import { SOURCE_LABELS, type SourceId } from "../../library/types";
@@ -199,53 +201,6 @@ function pausedReason(reason: string): string {
   if (reason === SOURCE_BLOCKING) return "Source keeps refusing downloads, on hold";
   if (reason === TOO_MANY_FAILURES) return "Too many failures in a row, on hold";
   return "Rate-limited, wait a while";
-}
-
-/**
- * A calm, human reason for the row's right edge. Raw tool output (exit codes,
- * stderr dumps) never reaches the screen: we bucket the few causes a user can
- * actually do something about and fall back to a generic phrase. "f Retry"
- * covers the ones a retry can still fix.
- */
-function shortError(e?: string): string {
-  if (!e) return "couldn't save";
-  const m = e.toLowerCase();
-  if (m.includes("missing on disk")) return "file didn't save";
-  if (m.includes("drm")) return "DRM protected";
-  // The host's words, not the track's: these clear up on their own, so they
-  // read like any other blip instead of a dead track.
-  if (/service unavailable|temporarily unavailable/.test(m))
-    return "network hiccup";
-  // Ahead of the generic case: YouTube's region message also says
-  // "unavailable", and naming the lock beats calling the track gone.
-  if (m.includes("your country") || /geo.?restrict/.test(m))
-    return "region-locked";
-  if (
-    m.includes("unavailable") ||
-    m.includes("private") ||
-    m.includes("removed") ||
-    m.includes("not exist") ||
-    m.includes("404")
-  )
-    return "track unavailable";
-  // Checked before the generic sign-in case: this one is skipped rather than
-  // retried, so saying which kind of sign-in it wanted is worth the words.
-  if (/confirm your age|age.?restrict/.test(m)) return "age-restricted";
-  // No bare "age" here: it matched "webpage", so a refused page read as a
-  // sign-in wall.
-  if (m.includes("sign in") || m.includes("login")) return "needs sign-in";
-  // Not "retry later": for label uploads the source refuses every attempt, so
-  // promising a later success is the misleading half of the old message.
-  if (m.includes("403") || m.includes("forbidden")) return "blocked by source";
-  if (
-    m.includes("timed out") ||
-    m.includes("timeout") ||
-    m.includes("network") ||
-    m.includes("connection") ||
-    m.includes("getaddrinfo")
-  )
-    return "network hiccup";
-  return "couldn't save";
 }
 
 /** What a row says on its right: progress, state, or a calm reason. */
@@ -1250,65 +1205,25 @@ export function Download() {
       gather: { done: 0, total: sel.length },
     });
 
-    // Enumerate the selected lists concurrently and enqueue each one's tracks the
-    // moment they're ready, so downloads start within seconds instead of waiting
-    // for every list to be fetched first. The queue view takes over as soon as the
-    // first songs land; the remaining lists keep streaming in behind it.
-    //
-    // The gather runs in the background after the UI moves on to the queue, so a
-    // mid-gather Cancel must stop it: otherwise each set that finishes loading
-    // would re-enqueue (and revive) the just-canceled queue. The queue hands us
-    // an abort signal; cancelAll/clearAll trip it and we bail before enqueuing.
+    // The queue view takes over as soon as the first songs land; the remaining
+    // lists keep streaming in behind it (see gatherLists).
     retireReceipt();
-    const signal = queue.beginGather();
     clearPartials();
-    let gathered = 0;
-    let addedAny = false;
-    let firstError: string | undefined;
-    let cursor = 0;
-    const worker = async (): Promise<void> => {
-      while (cursor < sel.length) {
-        if (signal.aborted) return;
-        const pl = sel[cursor++]!;
-        try {
-          const tracks = await adapter.listTracks(pl);
-          if (signal.aborted) return; // canceled mid-fetch: don't revive the queue
-          if (tracks.length > 0) {
-            const r = queue.enqueue(
-              tracks.map((t) => ({
-                source: adapter.id,
-                sourceLabel: adapter.label,
-                track: t,
-              })),
-            );
-            if (r.added > 0) addedAny = true;
-          }
-        } catch (e) {
-          firstError ??= e instanceof Error ? e.message : String(e);
-        }
-        gathered++;
-        setStep((prev) =>
-          prev.name === "adding"
-            ? { name: "adding", gather: { done: gathered, total: sel.length } }
-            : prev
-        );
-      }
-    };
-    try {
-      await Promise.all(
-        Array.from({ length: Math.min(5, sel.length) }, () => worker()),
-      );
-    } finally {
-      queue.endGather(signal);
-    }
+    const r = await gatherLists(queue, adapter, sel, (done, total) =>
+      setStep((prev) =>
+        prev.name === "adding"
+          ? { name: "adding", gather: { done, total } }
+          : prev
+      ),
+    );
 
-    if (signal.aborted) return; // canceled: leave the queue view's state alone
+    if (r.aborted) return; // canceled: leave the queue view's state alone
     if (queue.stats().total === 0) {
       // Nothing landed in the queue: everything was a duplicate, or every list
       // failed to enumerate.
       setStep(
-        firstError && !addedAny
-          ? { name: "error", message: firstError, source: adapter.id }
+        r.firstError && r.added === 0
+          ? { name: "error", message: r.firstError, source: adapter.id }
           : { name: "info", message: "Nothing new to download." },
       );
     }
