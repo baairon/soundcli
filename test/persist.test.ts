@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { snapshotItems, restorableItems } from "../src/download/persist";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  saveQueue,
+  saveQueueSync,
+  snapshotItems,
+  restorableItems,
+} from "../src/download/persist";
 import { SOUNDCLOUD_LIKED_TITLE } from "../src/sources/soundcloud";
 import type { QueueItem, QueueStatus } from "../src/download/queue";
 import type { Library } from "../src/library/library";
@@ -31,6 +39,47 @@ describe("snapshotItems", () => {
       "b:pending",
       "c:paused",
     ]);
+  });
+});
+
+describe("saveQueueSync, the write at quit", () => {
+  const tmpFile = (): string =>
+    path.join(mkdtempSync(path.join(os.tmpdir(), "soundcli-queue-")), "queue.json");
+  const saved = (file: string): string[] =>
+    (JSON.parse(readFileSync(file, "utf8")) as { items: { track: { id: string } }[] })
+      .items.map((i) => i.track.id);
+
+  it("replaces the saved queue whole and leaves nothing else behind", () => {
+    const file = tmpFile();
+    saveQueueSync([qitem("a", "pending")], { youtubeStarts: [] }, file);
+    saveQueueSync(
+      [qitem("a", "done"), qitem("b", "downloading")],
+      { youtubeStarts: [] },
+      file,
+    );
+    expect(saved(file)).toEqual(["b"]);
+    expect(readdirSync(path.dirname(file))).toEqual(["queue.json"]);
+  });
+
+  it("still saves, in place, when the copy beside it cannot be used", () => {
+    const file = tmpFile();
+    saveQueueSync([qitem("a", "pending")], { youtubeStarts: [] }, file);
+    // As when Windows refuses the rename because a scanner has the file open.
+    mkdirSync(`${file}.quit.tmp`);
+    writeFileSync(path.join(`${file}.quit.tmp`, "in-the-way"), "");
+    saveQueueSync([qitem("b", "pending")], { youtubeStarts: [] }, file);
+    expect(saved(file)).toEqual(["b"]);
+  });
+
+  it("is not gone over by an earlier write that finishes after it", async () => {
+    const file = tmpFile();
+    saveQueueSync([qitem("a", "pending")], { youtubeStarts: [] }, file);
+    // A write that was on its way when the quit came, asked at the last step
+    // whether the queue still wants it.
+    await saveQueue([qitem("b", "pending")], { youtubeStarts: [] }, () => false, file);
+    expect(saved(file)).toEqual(["a"]);
+    await saveQueue([qitem("b", "pending")], { youtubeStarts: [] }, () => true, file);
+    expect(saved(file)).toEqual(["b"]);
   });
 });
 

@@ -333,6 +333,12 @@ export class DownloadQueue extends EventEmitter {
   private items: QueueItem[] = [];
   private active = 0;
   private stopped = false;
+  /**
+   * Set for good by suspend(): the queue has been written for the last time
+   * and whatever was in flight is being killed. Nothing saves or starts after
+   * that, where `stopped` alone is lifted again by the next enqueue.
+   */
+  private suspended = false;
   private clearedDone = 0;
   private clearedSkipped = 0;
   private clearedFailed = 0;
@@ -344,6 +350,8 @@ export class DownloadQueue extends EventEmitter {
   /** Item ids being paused (vs canceled) so run() knows the intent on abort. */
   private readonly pausing = new Set<string>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The write on its way to disk, which the next one waits behind. */
+  private saving: Promise<void> = Promise.resolve();
   /** Set when the platform rate-limited us and we paused the queue. */
   private rateLimited = false;
   private rateLimitReason = "";
@@ -399,17 +407,50 @@ export class DownloadQueue extends EventEmitter {
     private concurrency = DEFAULT_CONCURRENCY,
     /** Awaited before each download spawns (the ffmpeg gate); injectable. */
     private ensureTools: () => Promise<void> = async () => {},
+    /** Where the queue is saved: the user's own file, unless a test says. */
+    private saveFile?: string,
   ) {
     super();
   }
 
   /** Persist the unfinished queue to disk, debounced (resume across restart). */
   private scheduleSave(): void {
-    if (this.saveTimer) return;
+    if (this.suspended || this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void saveQueue(this.items, this.saved()).catch(() => {});
+      void this.write().catch(() => {});
     }, 300);
+  }
+
+  /**
+   * One write of the unfinished queue, after any already on its way: two at
+   * once would share a temp file. suspend() makes the queue's last write, so
+   * one whose turn comes after it is dropped, and one it catches part-way is
+   * not moved into place.
+   */
+  private write(): Promise<void> {
+    const wanted = (): boolean => !this.suspended;
+    const mine = this.saving.then(() =>
+      wanted()
+        ? saveQueue(this.items, this.saved(), wanted, this.saveFile)
+        : undefined,
+    );
+    // One failed write must not end every later one.
+    this.saving = mine.catch(() => {});
+    return mine;
+  }
+
+  /**
+   * Write the unfinished queue now and wait for it, for a caller that must
+   * know its rows are on disk. False once the queue is suspended: it has been
+   * written for the last time, and nothing queued since is in that write.
+   */
+  async saveNow(): Promise<boolean> {
+    if (this.suspended) return false;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    await this.write();
+    return !this.suspended;
   }
 
   /** What is saved beside the rows. */
@@ -990,16 +1031,28 @@ export class DownloadQueue extends EventEmitter {
    * synchronously (downloading → pending) so it resumes from .part next launch.
    * `save` is false for a process that lost the library to another one, whose
    * saved queue this would overwrite.
+   *
+   * This is the queue's last write. The rows killed here settle as canceled a
+   * moment later, and a save taken then would leave them out, so a process
+   * that lived on past the debounce would forget what it was downloading.
+   *
+   * True when the queue is on disk as it stands, for a caller with something
+   * else to let go of only then.
    */
-  suspend(save = true): void {
+  suspend(save = true): boolean {
     this.stopped = true;
+    this.suspended = true;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
     this.clearPaceTimer();
     for (const c of this.controllers.values()) c.abort();
-    if (!save) return;
+    if (!save) return false;
     try {
-      saveQueueSync(this.items, this.saved());
+      saveQueueSync(this.items, this.saved(), this.saveFile);
+      return true;
     } catch {
       // best effort on exit
+      return false;
     }
   }
 
@@ -1285,7 +1338,7 @@ export class DownloadQueue extends EventEmitter {
   }
 
   private pump(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.suspended) return;
     // Only gates new starts: whatever is already running is left alone.
     const limit = this.blockedUntilSuccess ? 1 : Math.max(1, this.concurrency);
     while (this.active < limit) {

@@ -770,7 +770,9 @@ describe("settings move music folder", () => {
     } finally {
       await fs.rm(base, { recursive: true, force: true });
     }
-  });
+    // Three screens driven a tick at a time, behind every render before it in
+    // this file: about 1.5 s by itself and close to the default 5 s here.
+  }, 20_000);
 });
 
 describe("queue copy, banner, overlay, welcome paste", () => {

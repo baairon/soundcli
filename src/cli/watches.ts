@@ -59,9 +59,49 @@ export async function saveWatches(
 ): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   const file = watchesFile(dir);
-  const tmp = `${file}.tmp`;
+  // A name of its own: two commands at once must not share a temp file.
+  const tmp = `${file}.${process.pid}.tmp`;
   await fs.writeFile(tmp, JSON.stringify({ version: 1, watches }, null, 2), "utf8");
   await fs.rename(tmp, file);
+}
+
+/** A lock nobody has released in this long was left by a run that died. */
+const LOCK_STALE_MS = 10_000;
+
+/**
+ * Read the list, change it and write it back as one step. `watch` and
+ * `unwatch` each rewrite the whole file, so two of them at once (an agent, a
+ * script) would otherwise each save a list without the other's change.
+ */
+export async function changeWatches(
+  change: (watches: Watch[]) => Watch[],
+  dir: string = paths.data,
+): Promise<Watch[]> {
+  await fs.mkdir(dir, { recursive: true });
+  const lock = `${watchesFile(dir)}.lock`;
+  for (;;) {
+    try {
+      await fs.writeFile(lock, String(process.pid), { flag: "wx" });
+      break;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      // EPERM and EBUSY are Windows answering a create that met a delete.
+      if (code !== "EEXIST" && code !== "EPERM" && code !== "EBUSY") throw e;
+      const age = await fs.stat(lock).then(
+        (s) => Date.now() - s.mtimeMs,
+        () => 0,
+      );
+      if (age > LOCK_STALE_MS) await fs.rm(lock, { force: true }).catch(() => {});
+      else await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+  try {
+    const next = change(await loadWatches(dir));
+    await saveWatches(next, dir);
+    return next;
+  } finally {
+    await fs.rm(lock, { force: true }).catch(() => {});
+  }
 }
 
 /**

@@ -1,4 +1,4 @@
-import { promises as fs, writeFileSync, mkdirSync } from "node:fs";
+import { promises as fs, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { queueFile } from "../config/paths";
 import type { Library } from "../library/library";
@@ -110,24 +110,46 @@ function snapshot(items: QueueItem[], rest: Omit<SavedQueue, "items">): string {
 export async function saveQueue(
   items: QueueItem[],
   rest: Omit<SavedQueue, "items">,
+  /** Asked once the write is ready to go into place. */
+  wanted: () => boolean = () => true,
+  file: string = queueFile,
 ): Promise<void> {
   // The suite runs real queues, and every one of them would otherwise
   // overwrite the user's own saved queue with its fixtures.
-  if (process.env.VITEST) return;
-  await fs.mkdir(path.dirname(queueFile), { recursive: true });
-  const tmp = `${queueFile}.tmp`;
+  if (process.env.VITEST && file === queueFile) return;
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
   await fs.writeFile(tmp, snapshot(items, rest), "utf8");
-  await fs.rename(tmp, queueFile);
+  // The write at quit may have happened while this one was on its way (see
+  // saveQueueSync): an older one never goes over it.
+  if (!wanted()) return;
+  await fs.rename(tmp, file);
 }
 
-/** Synchronous save for app quit, so a partial download survives even on exit. */
+/**
+ * Synchronous save for app quit, so a partial download survives even on exit.
+ * Written beside the queue and renamed over it: a run killed part-way through
+ * this write leaves the last complete save, where half a file would read as
+ * an empty queue.
+ */
 export function saveQueueSync(
   items: QueueItem[],
   rest: Omit<SavedQueue, "items">,
+  file: string = queueFile,
 ): void {
-  if (process.env.VITEST) return;
-  mkdirSync(path.dirname(queueFile), { recursive: true });
-  writeFileSync(queueFile, snapshot(items, rest), "utf8");
+  // Only the user's own queue is off limits to the suite (see saveQueue).
+  if (process.env.VITEST && file === queueFile) return;
+  mkdirSync(path.dirname(file), { recursive: true });
+  const text = snapshot(items, rest);
+  try {
+    const tmp = `${file}.quit.tmp`;
+    writeFileSync(tmp, text, "utf8");
+    renameSync(tmp, file);
+  } catch {
+    // Windows refuses the rename while a scanner has the file open. A save
+    // written in place still beats no save at all on the way out.
+    writeFileSync(file, text, "utf8");
+  }
 }
 
 export async function loadQueue(): Promise<SavedQueue> {

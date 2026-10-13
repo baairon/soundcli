@@ -286,10 +286,17 @@ function parseRequest(raw: string): InboxRequest | null {
   return null;
 }
 
+/** The file each taken request is kept in until it is settled. */
+const heldFiles = new WeakMap<InboxRequest, string>();
+
 /**
  * Take the oldest request the owner is ready for, or null. A request `accept`
  * turns down stays in the inbox for a later tick; one that cannot be read is
  * dropped so it never blocks the ones behind it.
+ *
+ * Links are not removed when they are taken, only moved to a name no take
+ * reads: their sender has already been told they were handed over, so an owner
+ * that dies before queueing them must leave them behind (see settleRequest).
  */
 export async function takeRequest(
   dir: string = paths.data,
@@ -319,16 +326,60 @@ export async function takeRequest(
       request?.kind === "yield" &&
       Date.now() - Number.parseInt(name, 10) > STALE_MS;
     if (request && !stale && !accept(request)) continue;
-    // A file that cannot be removed (held open by a scanner) is not taken, or
-    // the next tick would take it again; it must not block the ones behind it.
+    const taken = request && !stale ? request : null;
+    // A yield is acted on at once and never wanted twice.
+    const held =
+      taken && taken.kind !== "yield"
+        ? `${file.slice(0, -".json".length)}.held`
+        : null;
+    // A file that cannot be moved or removed (held open by a scanner) is not
+    // taken, or the next tick would take it again; it must not block the ones
+    // behind it.
     try {
-      await fs.rm(file, { force: true });
+      if (held) await fs.rename(file, held);
+      else await fs.rm(file, { force: true });
     } catch {
       continue;
     }
-    if (request && !stale) return request;
+    if (!taken) continue;
+    if (held) heldFiles.set(taken, held);
+    return taken;
   }
   return null;
+}
+
+/**
+ * Let go of a taken request, once its links are in a queue that is on disk.
+ * Until then they exist nowhere else.
+ */
+export async function settleRequest(request: InboxRequest): Promise<void> {
+  const file = heldFiles.get(request);
+  if (!file) return;
+  heldFiles.delete(request);
+  await fs.rm(file, { force: true }).catch(() => {});
+}
+
+/**
+ * Put back every request an earlier owner took and never settled. Only the
+ * owner calls this, before it takes anything, so whatever is held then was
+ * left by a process that is gone. Queueing a link twice changes nothing, so a
+ * request served a second time costs one more listing at worst.
+ */
+export async function releaseHeld(dir: string = paths.data): Promise<void> {
+  const inbox = inboxDir(dir);
+  let names: string[];
+  try {
+    names = await fs.readdir(inbox);
+  } catch {
+    return;
+  }
+  for (const name of names.filter((n) => n.endsWith(".held"))) {
+    const file = path.join(inbox, name);
+    // Back under the name it arrived with, which keeps its place in line.
+    await fs
+      .rename(file, `${file.slice(0, -".held".length)}.json`)
+      .catch(() => {});
+  }
 }
 
 /** A tick's find. "displaced": the claim is no longer this process's. */
@@ -339,18 +390,24 @@ export type InboxTick = InboxRequest | { kind: "displaced" } | null;
  * at most one request. A yield is always taken; an add only while `canAdd()`
  * says the owner is free to start listing another batch. Ticks never overlap
  * inside the inbox, so two of them can't each take an add. A displaced owner
- * takes nothing: the requests are the new owner's to read.
+ * takes nothing: the requests are the new owner's to read. The first tick
+ * also brings back what the owner before this one left unfinished.
  */
 export function ownerInbox(
   claim: Claim,
   dir: string = paths.data,
 ): (canAdd: () => boolean) => Promise<InboxTick> {
   let taking = false;
+  let recovered = false;
   return async (canAdd) => {
     if (!(await claim.touch())) return { kind: "displaced" };
     if (taking) return null;
     taking = true;
     try {
+      if (!recovered) {
+        recovered = true;
+        await releaseHeld(dir);
+      }
       // A yield first, whatever arrived before it: an opening dashboard only
       // waits so long for the library.
       return (

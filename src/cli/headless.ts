@@ -27,6 +27,7 @@ import {
   claimInstance,
   liveOwner,
   ownerInbox,
+  settleRequest,
   submitRequest,
   TICK_MS,
   type Claim,
@@ -35,9 +36,9 @@ import {
 } from "./instance";
 import {
   askedBy,
+  changeWatches,
   loadWatches,
   sameLink,
-  saveWatches,
   type Asked,
   type Watch,
 } from "./watches";
@@ -359,14 +360,15 @@ export async function runWatch(
   }
 
   let failed = false;
+  const wanted: Watch[] = [];
   for (const { link, target } of targets) {
     const known = watches.find((w) => sameLink(w.link, link));
     if (known) {
       // Already watched: where it saves can change, what it has seen cannot,
       // or everything posted since would be passed over.
-      known.all = cmd.all;
-      known.into = cmd.into;
-      deps.out(describeWatch(known));
+      const again = { ...known, all: cmd.all, into: cmd.into };
+      wanted.push(again);
+      deps.out(describeWatch(again));
       continue;
     }
     try {
@@ -378,14 +380,25 @@ export async function runWatch(
         seen: [...new Set(listed.map((t) => t.id))],
         addedAt: new Date().toISOString(),
       };
-      watches.push(watch);
+      wanted.push(watch);
       deps.out(describeWatch(watch));
     } catch (e) {
       failed = true;
       deps.note(`${link}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  await saveWatches(watches, deps.dataDir);
+  // Onto the list as it is now, not as it was read before the listings: a
+  // watch another command made meanwhile stays.
+  await changeWatches((current) => {
+    for (const w of wanted) {
+      const known = current.find((c) => sameLink(c.link, w.link));
+      if (known) {
+        known.all = w.all;
+        known.into = w.into;
+      } else current.push(w);
+    }
+    return current;
+  }, deps.dataDir);
   return failed ? EXIT.failed : EXIT.ok;
 }
 
@@ -394,20 +407,21 @@ export async function runUnwatch(
   cmd: { links: string[] },
   deps: HeadlessDeps = defaultDeps(),
 ): Promise<number> {
-  const watches = await loadWatches(deps.dataDir);
-  let kept = watches;
   let missing = false;
-  for (const link of cmd.links) {
-    const rest = kept.filter((w) => !sameLink(w.link, link));
-    if (rest.length === kept.length) {
-      missing = true;
-      deps.note(`${link}: not watched`);
-    } else {
-      deps.out(`${link}: no longer watched, saved files stay`);
+  await changeWatches((watches) => {
+    let kept = watches;
+    for (const link of cmd.links) {
+      const rest = kept.filter((w) => !sameLink(w.link, link));
+      if (rest.length === kept.length) {
+        missing = true;
+        deps.note(`${link}: not watched`);
+      } else {
+        deps.out(`${link}: no longer watched, saved files stay`);
+      }
+      kept = rest;
     }
-    kept = rest;
-  }
-  if (kept.length !== watches.length) await saveWatches(kept, deps.dataDir);
+    return kept;
+  }, deps.dataDir);
   return missing ? EXIT.failed : EXIT.ok;
 }
 
@@ -474,9 +488,12 @@ async function run(
   // queue's own flag while the rows it parked stay parked.
   let lastHalt = "";
   let recheck: (() => void) | undefined;
-  // Handed-over requests with links still to list, each as what is left of
-  // it. Their sender has gone, so a run stopped under them gives them back.
-  const unlisted = new Set<() => InboxRequest | null>();
+  // Handed-over requests not yet settled, each with what is left of it to
+  // list. Their sender has gone, so a run stopped under them gives them back.
+  const unlisted = new Set<{
+    taken: InboxRequest;
+    rest: () => InboxRequest | null;
+  }>();
 
   const onItem = (item: QueueItem, track?: Track, owned = false): void => {
     const name = {
@@ -560,13 +577,16 @@ async function run(
       // Links from a later `add` or `sync` join this run rather than waiting
       // for it.
       const asked = await askedBy(request, deps.dataDir);
-      const rest = (): InboxRequest | null =>
-        asked.length === 0
-          ? null
-          : request.kind === "sync"
-            ? request
-            : { ...request, links: asked.map((a) => a.link) };
-      unlisted.add(rest);
+      const entry = {
+        taken: request,
+        rest: (): InboxRequest | null =>
+          asked.length === 0
+            ? null
+            : request.kind === "sync"
+              ? request
+              : { ...request, links: asked.map((a) => a.link) },
+      };
+      unlisted.add(entry);
       while (asked.length > 0) {
         const next = asked[0]!;
         const target = resolveLink(next.link, { all: next.all });
@@ -574,7 +594,13 @@ async function run(
         else deps.note(`${next.link}: ${target.reason}`);
         asked.shift();
       }
-      unlisted.delete(rest);
+      // Its links are in the queue; once that is on disk the request is done
+      // with. A queue that is stopping has had its last write: giveBack sees
+      // to the request then.
+      if (await engine!.queue.saveNow()) {
+        unlisted.delete(entry);
+        await settleRequest(request);
+      }
       return "added";
     } finally {
       looking--;
@@ -584,15 +610,17 @@ async function run(
   const tick = setInterval(() => void look().catch(() => {}), deps.tickMs);
   const unhear = deps.signals(stop);
 
-  const cleanup = (save = true): void => {
+  /** Lets go of everything; true when the queue went to disk on the way. */
+  const cleanup = (save = true): boolean => {
     clearInterval(tick);
     unhear();
     // Kills the children and writes the unfinished queue, so the next run (or
     // the dashboard) picks it up from the .part files. A displaced run writes
     // nothing: the files are the new owner's now.
-    engine?.queue.suspend(save);
+    const saved = engine?.queue.suspend(save) ?? false;
     if (save) engine?.library.flushSync();
     claim.release();
+    return saved;
   };
 
   const work = async (): Promise<"settled" | Stop> => {
@@ -627,11 +655,16 @@ async function run(
     }
   };
 
-  /** Back in the inbox for whoever owns the library next. */
-  const giveBack = async (): Promise<void> => {
-    for (const rest of unlisted) {
+  /**
+   * Back in the inbox for whoever owns the library next. What was already
+   * listed went out with the queue; when that did not reach the disk (`saved`
+   * false) the request stays held as well, whole, for the owner after.
+   */
+  const giveBack = async (saved: boolean): Promise<void> => {
+    for (const { taken, rest } of unlisted) {
       const request = rest();
       if (request) await submitRequest(request, deps.dataDir).catch(() => {});
+      if (saved) await settleRequest(taken);
     }
   };
 
@@ -647,8 +680,7 @@ async function run(
     // for it to arrive: that was ctrl-c, not a failure.
     if (!asked) await new Promise((r) => setTimeout(r, SIGNAL_GRACE_MS));
     if (asked !== "SIGINT" && asked !== "SIGTERM") {
-      cleanup();
-      await giveBack();
+      await giveBack(cleanup());
       return fail(e);
     }
     outcome = asked;
@@ -659,8 +691,7 @@ async function run(
   const s = engine?.queue.stats();
   const platformHalt =
     s && s.paused > 0 ? s.rateLimitReason || lastHalt || "on hold" : null;
-  cleanup(outcome !== "displaced");
-  await giveBack();
+  await giveBack(cleanup(outcome !== "displaced"));
 
   if (outcome === "yielded") return done(EXIT.tryLater, "dashboard opened");
   if (outcome === "displaced") {

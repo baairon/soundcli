@@ -144,6 +144,33 @@ describe("serveHandoffs", () => {
     expect(await liveOwner(dir)).toMatchObject({ kind: "tui" });
     claim!.release();
   });
+
+  it("leaves a request it had not finished queueing for the next owner", async () => {
+    const inbox = path.join(dir, "inbox");
+    const listing = enumerateMock.getMockImplementation()!;
+    // The link is still being read when the dashboard is closed.
+    enumerateMock.mockImplementation(() => new Promise(() => {}));
+    const claim = await claimInstance("tui", dir);
+    await submitRequest({ kind: "add", links: [SONG], all: false }, dir);
+    void serveHandoffs(
+      claim!,
+      new DownloadQueue(defaultConfig, emptyLib, 1),
+      dir,
+    )();
+    await vi.waitFor(async () =>
+      expect(await fs.readdir(inbox)).toEqual([expect.stringMatching(/\.held$/)]),
+    );
+    claim!.release();
+
+    enumerateMock.mockImplementation(listing);
+    const next = await claimInstance("tui", dir);
+    const queue = new DownloadQueue(defaultConfig, emptyLib, 1);
+    await serveHandoffs(next!, queue, dir)();
+    expect(queue.getItems()).toHaveLength(1);
+    expect(await fs.readdir(inbox)).toEqual([]);
+    queue.cancelAll();
+    next!.release();
+  });
 });
 
 describe("holdForDashboard", () => {

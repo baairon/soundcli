@@ -7,6 +7,7 @@ import {
   claimInstance,
   liveOwner,
   ownerInbox,
+  settleRequest,
   submitRequest,
   takeRequest,
   waitForRelease,
@@ -175,8 +176,33 @@ describe("inbox", () => {
       JSON.stringify({ kind: "add", links: "not-a-list" }),
     );
     await submitRequest({ kind: "add", links: ["a"], all: false }, dir);
-    expect(await takeRequest(dir)).toMatchObject({ links: ["a"] });
+    const taken = await takeRequest(dir);
+    expect(taken).toMatchObject({ links: ["a"] });
+    await settleRequest(taken!);
     expect(await fs.readdir(inbox)).toEqual([]);
+  });
+
+  it("keeps the links it has taken on disk until they are settled", async () => {
+    const inbox = path.join(dir, "inbox");
+    await submitRequest({ kind: "add", links: ["a"], all: false }, dir);
+    const taken = await takeRequest(dir);
+    // Under a name no take reads: an owner that dies here leaves the links
+    // behind instead of taking them with it.
+    expect(await fs.readdir(inbox)).toEqual([expect.stringMatching(/\.held$/)]);
+    expect(await takeRequest(dir)).toBeNull();
+    await settleRequest(taken!);
+    expect(await fs.readdir(inbox)).toEqual([]);
+  });
+
+  it("holds a sync the same way, and removes a yield the moment it is read", async () => {
+    const inbox = path.join(dir, "inbox");
+    await submitRequest({ kind: "yield" }, dir);
+    expect(await takeRequest(dir)).toEqual({ kind: "yield" });
+    expect(await fs.readdir(inbox)).toEqual([]);
+
+    await submitRequest({ kind: "sync" }, dir);
+    expect(await takeRequest(dir)).toEqual({ kind: "sync" });
+    expect(await fs.readdir(inbox)).toEqual([expect.stringMatching(/\.held$/)]);
   });
 
   it("ignores a request that is still being written", async () => {
@@ -238,6 +264,25 @@ describe("ownerInbox", () => {
     // The request is the new owner's to read.
     expect(await takeRequest(dir)).toMatchObject({ links: ["a"] });
     claim!.release();
+  });
+
+  it("gives a new owner what the last one took and never finished, oldest first", async () => {
+    await submitRequest({ kind: "add", links: ["a"], all: false }, dir);
+    await new Promise((r) => setTimeout(r, 5));
+    await submitRequest({ kind: "add", links: ["b"], all: false }, dir);
+    const first = await claimInstance("headless", dir);
+    expect(await ownerInbox(first!, dir)(() => true)).toMatchObject({
+      links: ["a"],
+    });
+    // Gone with that request in hand: nothing ever settles it.
+    first!.release();
+
+    const next = await claimInstance("tui", dir);
+    const tick = ownerInbox(next!, dir);
+    expect(await tick(() => true)).toMatchObject({ links: ["a"] });
+    expect(await tick(() => true)).toMatchObject({ links: ["b"] });
+    expect(await tick(() => true)).toBeNull();
+    next!.release();
   });
 });
 

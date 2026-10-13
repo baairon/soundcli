@@ -11,6 +11,7 @@ import {
   claimInstance,
   liveOwner,
   ownerInbox,
+  settleRequest,
   submitRequest,
   waitForRelease,
   type Claim,
@@ -60,6 +61,9 @@ export function serveHandoffs(
         const target = resolveLink(asked.link, { all: asked.all });
         if (target.ok) await enqueueAsked(queue, target, asked);
       }
+      // Done with only once its links are in the queue and that is on disk. A
+      // dashboard closed before this leaves the request for the next owner.
+      if (await queue.saveNow()) await settleRequest(request);
     } finally {
       busy = false;
     }

@@ -433,12 +433,102 @@ describe("runAdd", () => {
   it("finishes cleanly when that last look hits a file error", async () => {
     downloadsSucceed();
     await submitRequest({ kind: "add", links: [OTHER], all: false }, dir);
-    const rm = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("locked"));
+    const taking = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValueOnce(new Error("locked"));
     const code = await runAdd({ links: [SONG], all: false, json: true }, noTicks());
-    rm.mockRestore();
+    taking.mockRestore();
     expect(code).toBe(EXIT.ok);
-    // The request stays for its sender to run.
-    expect(await fs.readdir(path.join(dir, "inbox"))).toHaveLength(1);
+    // The request stays, untaken, for the next owner to read.
+    expect(await fs.readdir(path.join(dir, "inbox"))).toEqual([
+      expect.stringMatching(/\.json$/),
+    ]);
+  });
+
+  /** A handed-over link that never finishes listing: the run has it in hand. */
+  const otherNeverLists = (): void => {
+    enumerateMock.mockImplementation((url: string) => {
+      if (url === OTHER) return new Promise(() => {});
+      const slug = url.split("/").pop()!;
+      return Promise.resolve({
+        entries: [{ id: slug, title: slug, url, uploader: "Circuit Fauna" }],
+      });
+    });
+  };
+  const inboxFiles = (): Promise<string[]> =>
+    fs.readdir(path.join(dir, "inbox"));
+
+  it("keeps a handed-over request on disk until its links are queued, for the next run", async () => {
+    downloadsSucceed();
+    otherNeverLists();
+    await submitRequest({ kind: "add", links: [OTHER], all: false }, dir);
+    const cut = runAdd({ links: [SONG], all: false, json: true }, deps());
+    await vi.waitFor(async () =>
+      expect(await inboxFiles()).toEqual([expect.stringMatching(/\.held$/)]),
+    );
+    // Cut off with the request in hand: another process has the library now,
+    // so this run saves nothing on its way out.
+    await fs.writeFile(
+      path.join(dir, "instance.json"),
+      JSON.stringify({ pid: 2 ** 30, kind: "tui", startedAt: "" }),
+    );
+    expect(await cut).toBe(EXIT.tryLater);
+    expect((await inboxFiles()).some((n) => n.endsWith(".held"))).toBe(true);
+
+    // The next run to own the library finds the request and downloads it.
+    linksResolve();
+    out = [];
+    const code = await runAdd({ links: [SONG], all: false, json: true }, deps());
+    expect(code).toBe(EXIT.ok);
+    expect(events().some((e) => e.event === "link" && e.link === OTHER)).toBe(
+      true,
+    );
+    expect(await inboxFiles()).toEqual([]);
+  });
+
+  it("has a handed-over link in the saved queue before it lets the request go", async () => {
+    // Downloads never finish here, so the link stays a row waiting its turn.
+    const saved = path.join(dir, "queue.json");
+    const library = {
+      has: () => false,
+      get: () => undefined,
+      all: () => [],
+      upsert: async () => {},
+      flushSync: () => {},
+    } as unknown as Library;
+    await submitRequest({ kind: "add", links: [OTHER], all: false }, dir);
+    const run = runAdd(
+      { links: [SONG], all: false, json: true },
+      deps({
+        boot: async () => {
+          queue = new DownloadQueue(defaultConfig, library, 2, undefined, saved);
+          return { queue, library };
+        },
+      }),
+    );
+    // Nothing of the request is left in the inbox: it has been let go.
+    await vi.waitFor(async () => expect(await inboxFiles()).toEqual([]));
+    const rows = (
+      JSON.parse(await fs.readFile(saved, "utf8")) as {
+        items: { track: { id: string } }[];
+      }
+    ).items.map((i) => i.track.id);
+    expect(rows).toContain("night-drive");
+    signal("SIGINT");
+    expect(await run).toBe(EXIT.interrupted);
+  });
+
+  it("hands a request it was still reading back on ctrl-c, and holds nothing", async () => {
+    otherNeverLists();
+    await submitRequest({ kind: "add", links: [OTHER], all: false }, dir);
+    const run = runAdd({ links: [SONG], all: false, json: true }, deps());
+    await vi.waitFor(async () =>
+      expect(await inboxFiles()).toEqual([expect.stringMatching(/\.held$/)]),
+    );
+    signal("SIGINT");
+    expect(await run).toBe(EXIT.interrupted);
+    expect(await inboxFiles()).toEqual([expect.stringMatching(/\.json$/)]);
+    expect(await takeRequest(dir)).toMatchObject({ kind: "add", links: [OTHER] });
   });
 
   it.each([

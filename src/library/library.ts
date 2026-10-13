@@ -153,10 +153,17 @@ export class Library {
     if (this.savedVersion === this.version) return;
     try {
       mkdirSync(path.dirname(libraryIndexFile), { recursive: true });
-      // A temp file of its own: the write in flight is using the other one.
-      const tmp = `${libraryIndexFile}.quit.tmp`;
-      writeFileSync(tmp, JSON.stringify(this.index), "utf8");
-      renameSync(tmp, libraryIndexFile);
+      const text = JSON.stringify(this.index);
+      try {
+        // A temp file of its own: the write in flight is using the other one.
+        const tmp = `${libraryIndexFile}.quit.tmp`;
+        writeFileSync(tmp, text, "utf8");
+        renameSync(tmp, libraryIndexFile);
+      } catch {
+        // Windows refuses the rename while a scanner has the index open. A
+        // write in place still beats losing the run's last songs.
+        writeFileSync(libraryIndexFile, text, "utf8");
+      }
       this.savedVersion = this.version;
     } catch {
       // best effort on exit

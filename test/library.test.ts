@@ -79,6 +79,21 @@ describe("Library, writing its index", () => {
     expect(onDisk()).toEqual(["youtube:a", "youtube:b"]);
   });
 
+  it("still writes at quit, in place, when the copy beside the index cannot be used", async () => {
+    // As when Windows refuses the rename because a scanner has the file open.
+    const blocked = `${tmp.file}.quit.tmp`;
+    await fs.mkdir(blocked);
+    await fs.writeFile(`${blocked}/in-the-way`, "");
+    try {
+      const library = await Library.load();
+      await library.upsert(track("a"));
+      library.flushSync();
+      expect(onDisk()).toEqual(["youtube:a"]);
+    } finally {
+      rmSync(blocked, { recursive: true, force: true });
+    }
+  });
+
   it("keeps writing after one write fails", async () => {
     const real = fs.rename.bind(fs);
     let failed = false;

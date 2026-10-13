@@ -30,7 +30,7 @@ Then it asks where your music comes from. Pick **YouTube**, **SoundCloud**, or *
 
 ## Your library, kept in order
 
-Every track downloads in its original quality, with album artwork and artist details included, and gets sorted into folders automatically so your collection stays organized. Almost any link works: playlists, albums, artist profiles, your likes, or a single song. Public Spotify playlists and albums work without signing in.
+Every track downloads at the best quality its source streams in your library's format, with album artwork and artist details included, and gets sorted into folders automatically so your collection stays organized. Almost any link works: playlists, albums, artist profiles, your likes, or a single song. Public Spotify playlists and albums work without signing in, and each of their songs is matched and downloaded from YouTube.
 
 It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. A song that can't be downloaded (removed, private, copy-protected) is remembered and left alone instead of failing again on every run. Press `F` in Downloads to try those again. Long YouTube playlists download at a steady pace rather than all at once, because YouTube blocks downloads that come too fast. Once a track is saved, it's there for good. You can rename tracks and playlists directly from the interface to keep everything tidy.
 
