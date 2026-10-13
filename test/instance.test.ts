@@ -217,6 +217,18 @@ describe("ownerInbox", () => {
     claim!.release();
   });
 
+  it("takes a yield ahead of the adds queued before it", async () => {
+    const claim = await claimInstance("headless", dir);
+    const tick = ownerInbox(claim!, dir);
+    await submitRequest({ kind: "add", links: ["a"], all: false }, dir);
+    await new Promise((r) => setTimeout(r, 5));
+    await submitRequest({ kind: "yield" }, dir);
+
+    expect(await tick(() => true)).toEqual({ kind: "yield" });
+    expect(await tick(() => true)).toMatchObject({ links: ["a"] });
+    claim!.release();
+  });
+
   it("takes nothing once the claim is someone else's", async () => {
     const claim = await claimInstance("tui", dir);
     const tick = ownerInbox(claim!, dir);
@@ -262,5 +274,78 @@ describe("waitForRelease", () => {
     const claim = await claimInstance("headless", dir);
     expect(await waitForRelease(dir, 100)).toBe(false);
     claim!.release();
+  });
+});
+
+describe("claimInstance, when two start together", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("tries again when the create meets a delete still in progress", async () => {
+    // Windows answers EPERM, not EEXIST, while another process is deleting
+    // the file. That clears within moments and must not fail the run.
+    const real = fs.writeFile.bind(fs);
+    let first = true;
+    vi.spyOn(fs, "writeFile").mockImplementation(((
+      file: string,
+      data: string,
+      opts: unknown,
+    ) => {
+      if (first && (opts as { flag?: string })?.flag === "wx") {
+        first = false;
+        return Promise.reject(
+          Object.assign(new Error("EPERM: operation not permitted, open"), {
+            code: "EPERM",
+          }),
+        );
+      }
+      return real(file, data, opts as never);
+    }) as never);
+
+    const claim = await claimInstance("headless", dir);
+    expect(claim).not.toBeNull();
+    claim!.release();
+  });
+
+  it("never lets two takeovers of one dead claim both win", async () => {
+    await fs.writeFile(claimFile(), rival);
+    const realRm = fs.rm.bind(fs);
+    const realRename = fs.rename.bind(fs);
+    let calls = 0;
+    // The first to judge the claim abandoned stalls before clearing it, long
+    // enough for the second to take over in between.
+    const stall = async (): Promise<void> => {
+      if (calls++ === 0) await new Promise((r) => setTimeout(r, 200));
+    };
+    vi.spyOn(fs, "rm").mockImplementation((async (f: string, o: never) => {
+      await stall();
+      return realRm(f, o);
+    }) as never);
+    vi.spyOn(fs, "rename").mockImplementation((async (a: string, b: string) => {
+      await stall();
+      return realRename(a, b);
+    }) as never);
+
+    const slow = claimInstance("headless", dir);
+    await new Promise((r) => setTimeout(r, 20));
+    const quick = claimInstance("headless", dir);
+    const [a, b] = await Promise.all([quick, slow]);
+
+    // Never both. (Neither is allowed: on a slow disk each can find the other
+    // mid-step and stand down, and the next run simply claims.)
+    expect([a, b].filter(Boolean).length).toBeLessThanOrEqual(1);
+    a?.release();
+    b?.release();
+  });
+
+  it("does not take a claim dated in the future for a live one forever", async () => {
+    await fs.writeFile(
+      claimFile(),
+      JSON.stringify({ pid: process.pid, kind: "tui", startedAt: "" }),
+    );
+    const future = new Date(Date.now() + 3_600_000);
+    await fs.utimes(claimFile(), future, future);
+    expect(await liveOwner(dir)).toBeNull();
   });
 });

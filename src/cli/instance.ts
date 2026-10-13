@@ -36,6 +36,44 @@ function inboxDir(dir: string): string {
   return path.join(dir, "inbox");
 }
 
+/**
+ * Create the claim, or throw EEXIST when there is one. Windows answers EPERM
+ * or EBUSY instead to a create that lands while another process is still
+ * deleting the file, which clears within moments, so those are tried again.
+ */
+async function createExclusive(file: string, owner: Owner): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.writeFile(file, JSON.stringify(owner), { flag: "wx" });
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if ((code !== "EPERM" && code !== "EBUSY") || attempt === 4) throw e;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+}
+
+/**
+ * Clear a claim just judged abandoned. Judging and removing are two steps,
+ * and another process can put its own claim there in between, so the file is
+ * moved aside and judged again: one that turns out to be live goes back.
+ * False when the claim was not ours to clear.
+ */
+async function clearAbandoned(file: string): Promise<boolean> {
+  const aside = `${file}.${process.pid}.old`;
+  try {
+    await fs.rename(file, aside);
+  } catch (e) {
+    // Already gone is as good as cleared.
+    return (e as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  const live = await readClaimAt(aside);
+  if (live) await fs.link(aside, file).catch(() => {});
+  await fs.rm(aside, { force: true }).catch(() => {});
+  return !live;
+}
+
 function isRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -52,9 +90,18 @@ function isRunning(pid: number): boolean {
  * and then written, so that one is most likely being made this instant.
  */
 async function readClaim(dir: string): Promise<Owner | "unreadable" | null> {
-  const file = claimFile(dir);
+  return readClaimAt(claimFile(dir));
+}
+
+async function readClaimAt(
+  file: string,
+): Promise<Owner | "unreadable" | null> {
   try {
-    if (Date.now() - (await fs.stat(file)).mtimeMs > STALE_MS) return null;
+    // Either way from now: a claim dated in the future (a clock set back) was
+    // never touched "recently" and must not pass for a live one until then.
+    if (Math.abs(Date.now() - (await fs.stat(file)).mtimeMs) > STALE_MS) {
+      return null;
+    }
     const owner = JSON.parse(await fs.readFile(file, "utf8")) as Owner | null;
     if (typeof owner?.pid !== "number") return "unreadable";
     return isRunning(owner.pid) ? owner : null;
@@ -110,13 +157,13 @@ export async function claimInstance(
   let tookOver = false;
   for (let attempt = 0; attempt < 2 && !held; attempt++) {
     try {
-      await fs.writeFile(file, JSON.stringify(owner), { flag: "wx" });
+      await createExclusive(file, owner);
       held = true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       // Live, or being written this instant: either way not ours to remove.
       if (await readClaim(dir)) return null;
-      await fs.rm(file, { force: true });
+      if (!(await clearAbandoned(file))) return null;
       tookOver = true;
     }
   }
@@ -264,7 +311,13 @@ export async function takeRequest(
       request?.kind === "yield" &&
       Date.now() - Number.parseInt(name, 10) > STALE_MS;
     if (request && !stale && !accept(request)) continue;
-    await fs.rm(file, { force: true });
+    // A file that cannot be removed (held open by a scanner) is not taken, or
+    // the next tick would take it again; it must not block the ones behind it.
+    try {
+      await fs.rm(file, { force: true });
+    } catch {
+      continue;
+    }
     if (request && !stale) return request;
   }
   return null;
@@ -290,7 +343,12 @@ export function ownerInbox(
     if (taking) return null;
     taking = true;
     try {
-      return await takeRequest(dir, (r) => r.kind === "yield" || canAdd());
+      // A yield first, whatever arrived before it: an opening dashboard only
+      // waits so long for the library.
+      return (
+        (await takeRequest(dir, (r) => r.kind === "yield")) ??
+        (await takeRequest(dir, (r) => r.kind === "yield" || canAdd()))
+      );
     } finally {
       taking = false;
     }
