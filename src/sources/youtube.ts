@@ -1,7 +1,8 @@
 import { enumerate, type YtEntry } from "../ytdlp/ytdlp";
 import { linkCollectionTitle } from "../util/format";
+import { accountIdOf, ownerForAccount } from "./accounts";
 import { normalizeHandle, ownerFromHandle } from "./handle";
-import { detectInput } from "./detect";
+import { detectInput, uploadsUrl } from "./detect";
 import type {
   SourceAdapter,
   SourcePlaylist,
@@ -19,13 +20,21 @@ function playlistUrlFromEntry(e: YtEntry): string {
 }
 
 /** YouTube by handle: lists the channel's public playlists (no auth/cookies). */
-export function makeYoutube(input?: string): SourceAdapter {
+export function makeYoutube(
+  input?: string,
+  /** The account registry file; tests point it at a temp one. */
+  accounts?: string,
+): SourceAdapter {
   const d = input ? detectInput(input) : null;
   let h: string | undefined;
   let owner: string | undefined;
   let singleUrl: string | undefined;
 
-  if (d?.ok && d.source === "youtube") {
+  const uploads = input ? uploadsUrl(input) : undefined;
+  if (uploads) {
+    // A channel's videos tab is one list, read like a playlist.
+    singleUrl = uploads;
+  } else if (d?.ok && d.source === "youtube") {
     if (d.kind === "profile") {
       h = d.value;
       owner = ownerFromHandle(d.value);
@@ -39,7 +48,9 @@ export function makeYoutube(input?: string): SourceAdapter {
   return {
     id: "youtube",
     label: "YouTube",
-    owner,
+    get owner() {
+      return owner;
+    },
 
     async listPlaylists(): Promise<SourcePlaylist[]> {
       if (singleUrl) {
@@ -52,6 +63,16 @@ export function makeYoutube(input?: string): SourceAdapter {
       }
       if (!h) throw new Error("enter your YouTube handle first.");
       const col = await enumerate(`https://www.youtube.com/@${h}/playlists`, {});
+      // The handle only found the channel: the owner is whoever its id was
+      // first seen as, so a renamed handle keeps its folders (see accounts).
+      if (owner) {
+        owner = await ownerForAccount(
+          "youtube",
+          accountIdOf("youtube", col),
+          owner,
+          accounts,
+        );
+      }
       return col.entries
         .filter((e) => e.id)
         .map((e) => ({

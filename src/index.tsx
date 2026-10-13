@@ -48,21 +48,31 @@ async function main(): Promise<void> {
   }
 
   if (command.kind === "invalid") {
-    const bareAdd = command.inAdd && command.arg === "add";
-    console.error(
-      `${bareAdd ? "add needs at least one link" : `unknown argument: ${command.arg}`}\n`,
-    );
+    console.error(`${command.why ?? `unknown argument: ${command.arg}`}\n`);
     console.error(HELP_TEXT);
-    process.exitCode = command.inAdd ? 2 : 1;
+    process.exitCode = command.in ? 2 : 1;
     return;
   }
 
-  if (command.kind === "add") {
+  if (
+    command.kind === "add" ||
+    command.kind === "watch" ||
+    command.kind === "unwatch" ||
+    command.kind === "sync"
+  ) {
     // No dashboard: nothing on this path may touch the alternate screen.
     // Force-exit like the dashboard does, so a dangling handle can't hold the
     // caller's script open.
-    const { runAdd } = await import("./cli/headless");
-    process.exit(await runAdd(command));
+    const headless = await import("./cli/headless");
+    process.exit(
+      await (command.kind === "add"
+        ? headless.runAdd(command)
+        : command.kind === "watch"
+          ? headless.runWatch(command)
+          : command.kind === "unwatch"
+            ? headless.runUnwatch(command)
+            : headless.runSync(command)),
+    );
   }
 
   // Run the dashboard in the alternate screen so it updates in place like a

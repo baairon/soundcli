@@ -421,6 +421,10 @@ export class DownloadQueue extends EventEmitter {
     this.config = config;
   }
 
+  getConfig(): Config {
+    return this.config;
+  }
+
   getItems(): QueueItem[] {
     return this.items;
   }

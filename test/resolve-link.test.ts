@@ -79,6 +79,32 @@ describe("resolveLink", () => {
     }
   });
 
+  it("reads an artist's uploads as the one list they are", async () => {
+    for (const [source, link, url] of [
+      [
+        "soundcloud",
+        "soundcloud.com/vesper/tracks",
+        "https://soundcloud.com/vesper/tracks",
+      ],
+      [
+        "youtube",
+        "https://www.youtube.com/@Vesper/videos?view=0",
+        "https://www.youtube.com/@Vesper/videos",
+      ],
+    ] as const) {
+      // No --all needed: it is one list, not the whole profile.
+      expect(resolveLink(link)).toEqual({
+        ok: true,
+        kind: "lists",
+        source,
+        input: link,
+        pick: "single",
+      });
+      const lists = await adapterFor(source, link).listPlaylists();
+      expect(lists.map((l) => l.url)).toEqual([url]);
+    }
+  });
+
   it("refuses a bare handle, which names no site", () => {
     const r = resolveLink("lumen");
     expect(r.ok).toBe(false);

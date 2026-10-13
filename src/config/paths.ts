@@ -22,6 +22,9 @@ export const libraryIndexFile = path.join(paths.data, "library.json");
 /** Persisted download queue, so pending/paused downloads survive a restart. */
 export const queueFile = path.join(paths.data, "queue.json");
 
+/** Which owner each account id was first seen under (see sources/accounts). */
+export const accountsFile = path.join(paths.data, "accounts.json");
+
 /** Recently played history, newest first. */
 export const historyFile = path.join(paths.data, "history.json");
 

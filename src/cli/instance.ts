@@ -18,7 +18,9 @@ export interface Owner {
 
 export type InboxRequest =
   /** Links for the owner to queue, as `sndcli add` received them. */
-  | { kind: "add"; links: string[]; all: boolean }
+  | { kind: "add"; links: string[]; all: boolean; into?: string }
+  /** Check every watched link, as `sndcli sync` would (see cli/watches). */
+  | { kind: "sync" }
   /** A dashboard is opening and wants the queue: save it and step aside. */
   | { kind: "yield" };
 
@@ -265,12 +267,18 @@ function parseRequest(raw: string): InboxRequest | null {
   try {
     const r = JSON.parse(raw) as Partial<InboxRequest> & Record<string, unknown>;
     if (r.kind === "yield") return { kind: "yield" };
+    if (r.kind === "sync") return { kind: "sync" };
     if (
       r.kind === "add" &&
       Array.isArray(r.links) &&
       r.links.every((l) => typeof l === "string")
     ) {
-      return { kind: "add", links: r.links, all: r.all === true };
+      return {
+        kind: "add",
+        links: r.links,
+        all: r.all === true,
+        into: typeof r.into === "string" ? r.into : undefined,
+      };
     }
   } catch {
     // not JSON

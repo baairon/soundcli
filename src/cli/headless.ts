@@ -8,7 +8,7 @@ import { ensureYtDlp, finalizeStagedYtDlp } from "../bin/ytdlp-fetch";
 import { maybeUpdateYtDlp } from "../bin/ytdlp-update";
 import { loadConfig } from "../config/config";
 import { paths } from "../config/paths";
-import { enqueueTarget } from "../download/gather";
+import { enqueueAsked, listTarget } from "../download/gather";
 import { loadQueue } from "../download/persist";
 import {
   DownloadQueue,
@@ -21,6 +21,7 @@ import { migrateOwnerLayout } from "../library/migrate";
 import { reconcileLibrary } from "../library/reconcile";
 import type { Track } from "../library/types";
 import { resolveLink, type LinkTarget } from "../sources/resolve-link";
+import type { SourceTrack } from "../sources/types";
 import {
   awaitPickup,
   claimInstance,
@@ -29,13 +30,30 @@ import {
   submitRequest,
   TICK_MS,
   type Claim,
+  type InboxRequest,
   type OwnerKind,
 } from "./instance";
+import {
+  askedBy,
+  loadWatches,
+  sameLink,
+  saveWatches,
+  type Asked,
+  type Watch,
+} from "./watches";
 
 export interface AddCommand {
   links: string[];
   all: boolean;
   json: boolean;
+  /** A folder of the user's own collection to save into. */
+  into?: string;
+}
+
+export interface WatchCommand {
+  links: string[];
+  all: boolean;
+  into?: string;
 }
 
 /**
@@ -63,6 +81,9 @@ const SIGNAL_STOPS = {
 } as const;
 
 export type StopSignal = keyof typeof SIGNAL_STOPS;
+
+/** How long a failure waits for the signal that may have caused it. */
+const SIGNAL_GRACE_MS = 50;
 
 /**
  * Everything `--json` prints, one object per line. This is a public contract:
@@ -116,6 +137,11 @@ export interface HeadlessDeps {
   /** Setup chatter and errors, on stderr, so stdout stays parseable. */
   note: (line: string) => void;
   boot: (note: (message: string) => void) => Promise<Engine>;
+  /** Read what a link lists right now, with no engine: a watch's baseline. */
+  list: (
+    target: OkTarget,
+    note: (message: string) => void,
+  ) => Promise<SourceTrack[]>;
   /** Hear the signals that stop a run; returns how to stop listening. */
   signals: (onSignal: (signal: StopSignal) => void) => () => void;
 }
@@ -152,6 +178,10 @@ function defaultDeps(): HeadlessDeps {
     out: (line) => process.stdout.write(`${line}\n`),
     note: (line) => process.stderr.write(`${line}\n`),
     boot: bootEngine,
+    list: async (target, note) => {
+      await ensureYtDlp(note);
+      return listTarget(target);
+    },
     signals: (onSignal) => {
       const signals = Object.keys(SIGNAL_STOPS) as StopSignal[];
       const heard = signals.map((signal) => {
@@ -199,27 +229,31 @@ function describe(e: HeadlessEvent): string {
 
 type OkTarget = Extract<LinkTarget, { ok: true }>;
 
+/** A link to queue, already routed. */
+type Job = Asked & { target: OkTarget };
+
 /** Why a run ended before its queue settled. */
 type Stop = "yielded" | "displaced" | StopSignal;
 
 /**
- * Become the owner, or hand the links to the process that is and return its
+ * Become the owner, or hand the request to the process that is and return its
  * kind. An owner can exit between any two of these checks, so a miss is tried
  * again rather than answered with a hand-off to nobody.
  */
 async function claimOrHandOff(
-  cmd: AddCommand,
+  handOff: InboxRequest,
   deps: HeadlessDeps,
 ): Promise<Claim | OwnerKind> {
   for (let attempt = 0; attempt < 5; attempt++) {
     const claim = await claimInstance("headless", deps.dataDir);
     if (claim) return claim;
     const owner = await liveOwner(deps.dataDir);
-    if (!owner) continue;
-    const request = await submitRequest(
-      { kind: "add", links: cmd.links, all: cmd.all },
-      deps.dataDir,
-    );
+    if (!owner) {
+      // A claim being created is empty for a moment: give it time to fill.
+      await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+      continue;
+    }
+    const request = await submitRequest(handOff, deps.dataDir);
     // False: the owner left before reading it, so the links are still ours.
     if (await awaitPickup(request, deps.dataDir, deps.tickMs * 3)) {
       return owner.kind;
@@ -239,11 +273,74 @@ export async function runAdd(
   cmd: AddCommand,
   deps: HeadlessDeps = defaultDeps(),
 ): Promise<number> {
-  const emit = (e: HeadlessEvent): void =>
-    deps.out(cmd.json ? JSON.stringify(e) : describe(e));
-
   // Every link is checked before anything is claimed or fetched, so a typo
   // fails in milliseconds and changes nothing.
+  const jobs: Job[] = [];
+  for (const link of cmd.links) {
+    const target = resolveLink(link, { all: cmd.all });
+    if (!target.ok) {
+      deps.note(`${link}: ${target.reason}`);
+      return EXIT.usage;
+    }
+    jobs.push({ link, all: cmd.all, into: cmd.into, target });
+  }
+  return run(
+    jobs,
+    { kind: "add", links: cmd.links, all: cmd.all, into: cmd.into },
+    cmd.json,
+    deps,
+  );
+}
+
+const NOTHING_WATCHED = "Nothing is watched. Start with: sndcli watch <link>";
+
+/**
+ * Download what is new on every watched link and return the exit code: the
+ * same run as `add`, over the links `watch` remembered. It also carries on
+ * whatever an earlier run left in the queue, so one scheduled command keeps
+ * everything moving.
+ */
+export async function runSync(
+  cmd: { json: boolean },
+  deps: HeadlessDeps = defaultDeps(),
+): Promise<number> {
+  const jobs: Job[] = [];
+  for (const watch of await loadWatches(deps.dataDir)) {
+    const target = resolveLink(watch.link, { all: watch.all });
+    // Checked when it was made: one that no longer reads is passed over.
+    if (target.ok) jobs.push({ ...watch, target });
+    else deps.note(`${watch.link}: ${target.reason}`);
+  }
+  if (jobs.length === 0) deps.note(NOTHING_WATCHED);
+  return run(jobs, { kind: "sync" }, cmd.json, deps);
+}
+
+/** The plain-text line for a watch, when it is made and when they are listed. */
+function describeWatch(w: Watch): string {
+  const where = w.into ? `"${w.into}"` : "its own folder";
+  const before =
+    w.seen.length > 0
+      ? `, the ${plural(w.seen.length, "song")} there before are left alone`
+      : "";
+  return `${w.link}: new songs save into ${where}${before}`;
+}
+
+/**
+ * Remember links for `sync` to keep current, or list them when given none.
+ * What a link holds today is recorded and left alone: `add` takes what is
+ * there, a watch takes what comes after, and the two can be run together.
+ */
+export async function runWatch(
+  cmd: WatchCommand,
+  deps: HeadlessDeps = defaultDeps(),
+): Promise<number> {
+  const watches = await loadWatches(deps.dataDir);
+  if (cmd.links.length === 0) {
+    if (watches.length === 0) deps.note(NOTHING_WATCHED);
+    for (const w of watches) deps.out(describeWatch(w));
+    return EXIT.ok;
+  }
+
   const targets: { link: string; target: OkTarget }[] = [];
   for (const link of cmd.links) {
     const target = resolveLink(link, { all: cmd.all });
@@ -251,8 +348,88 @@ export async function runAdd(
       deps.note(`${link}: ${target.reason}`);
       return EXIT.usage;
     }
+    // A generic site's link may still be a whole page of songs.
+    if (target.kind === "track" && target.source !== "link") {
+      deps.note(
+        `${link}: that is one song, and a song does not change. Use: sndcli add <link>`,
+      );
+      return EXIT.usage;
+    }
     targets.push({ link, target });
   }
+
+  let failed = false;
+  for (const { link, target } of targets) {
+    const known = watches.find((w) => sameLink(w.link, link));
+    if (known) {
+      // Already watched: where it saves can change, what it has seen cannot,
+      // or everything posted since would be passed over.
+      known.all = cmd.all;
+      known.into = cmd.into;
+      deps.out(describeWatch(known));
+      continue;
+    }
+    try {
+      const listed = await deps.list(target, deps.note);
+      const watch: Watch = {
+        link,
+        all: cmd.all,
+        into: cmd.into,
+        seen: [...new Set(listed.map((t) => t.id))],
+        addedAt: new Date().toISOString(),
+      };
+      watches.push(watch);
+      deps.out(describeWatch(watch));
+    } catch (e) {
+      failed = true;
+      deps.note(`${link}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  await saveWatches(watches, deps.dataDir);
+  return failed ? EXIT.failed : EXIT.ok;
+}
+
+/** Stop watching links. What they already saved stays. */
+export async function runUnwatch(
+  cmd: { links: string[] },
+  deps: HeadlessDeps = defaultDeps(),
+): Promise<number> {
+  const watches = await loadWatches(deps.dataDir);
+  let kept = watches;
+  let missing = false;
+  for (const link of cmd.links) {
+    const rest = kept.filter((w) => !sameLink(w.link, link));
+    if (rest.length === kept.length) {
+      missing = true;
+      deps.note(`${link}: not watched`);
+    } else {
+      deps.out(`${link}: no longer watched, saved files stay`);
+    }
+    kept = rest;
+  }
+  if (kept.length !== watches.length) await saveWatches(kept, deps.dataDir);
+  return missing ? EXIT.failed : EXIT.ok;
+}
+
+/**
+ * The run behind `add` and `sync`: queue the jobs, see them through, and
+ * report. `handOff` is what a process that already owns the library is asked
+ * to do instead.
+ */
+async function run(
+  jobs: Job[],
+  handOff: InboxRequest,
+  json: boolean,
+  deps: HeadlessDeps,
+): Promise<number> {
+  // Nothing follows `done`. A run that is stopped leaves listings and
+  // downloads to finish in their own time, and their lines would trail it.
+  let over = false;
+  const emit = (e: HeadlessEvent): void => {
+    if (over) return;
+    deps.out(json ? JSON.stringify(e) : describe(e));
+    over = e.event === "done";
+  };
 
   const tally = { saved: 0, exists: 0, failed: 0, retryable: 0 };
   const done = (exit: number, halted: string | null = null): number => {
@@ -273,12 +450,12 @@ export async function runAdd(
 
   let claim: Claim;
   try {
-    const held = await claimOrHandOff(cmd, deps);
+    const held = await claimOrHandOff(handOff, deps);
     if (typeof held === "string") {
       emit({ event: "handoff", owner: held });
       // A script reads `done` as the end of every run. For a person the line
       // above is the whole story, and "0 saved" under it reads as a failure.
-      return cmd.json ? done(EXIT.ok) : EXIT.ok;
+      return json ? done(EXIT.ok) : EXIT.ok;
     }
     claim = held;
   } catch (e) {
@@ -297,6 +474,9 @@ export async function runAdd(
   // queue's own flag while the rows it parked stay parked.
   let lastHalt = "";
   let recheck: (() => void) | undefined;
+  // Handed-over requests with links still to list, each as what is left of
+  // it. Their sender has gone, so a run stopped under them gives them back.
+  const unlisted = new Set<() => InboxRequest | null>();
 
   const onItem = (item: QueueItem, track?: Track, owned = false): void => {
     const name = {
@@ -328,16 +508,18 @@ export async function runAdd(
     // A canceled row means the run is stopping; it resumes from the saved queue.
   };
 
-  const add = async (link: string, target: OkTarget): Promise<void> => {
+  const add = async (job: Job): Promise<void> => {
     busy++;
     try {
       // Ahead of the backlog an earlier session left, which can run for hours.
-      const r = await enqueueTarget(engine!.queue, target, { front: true });
+      const r = await enqueueAsked(engine!.queue, job.target, job, {
+        front: true,
+      });
       if (r.firstError) linkErrors++;
       tally.exists += r.alreadySaved;
       emit({
         event: "link",
-        link,
+        link: job.link,
         tracks: r.total,
         new: r.newTracks,
         saved: r.alreadySaved,
@@ -352,8 +534,13 @@ export async function runAdd(
   };
 
   let stop!: (why: Stop) => void;
+  /** The first stop asked for, readable where the promise can't be. */
+  let asked: Stop | undefined;
   const stopped = new Promise<Stop>((resolve) => {
-    stop = resolve;
+    stop = (why) => {
+      asked ??= why;
+      resolve(why);
+    };
   });
 
   // The claim is touched from the first moment: setup can spend a minute
@@ -366,16 +553,28 @@ export async function runAdd(
     try {
       const request = await inbox(() => engine !== undefined && busy === 0);
       if (!request) return "empty";
-      if (request.kind !== "add") {
+      if (request.kind === "yield" || request.kind === "displaced") {
         stop(request.kind === "yield" ? "yielded" : "displaced");
         return "stopping";
       }
-      // Links from a later `add` join this run rather than waiting for it.
-      for (const link of request.links) {
-        const target = resolveLink(link, { all: request.all });
-        if (target.ok) await add(link, target);
-        else deps.note(`${link}: ${target.reason}`);
+      // Links from a later `add` or `sync` join this run rather than waiting
+      // for it.
+      const asked = await askedBy(request, deps.dataDir);
+      const rest = (): InboxRequest | null =>
+        asked.length === 0
+          ? null
+          : request.kind === "sync"
+            ? request
+            : { ...request, links: asked.map((a) => a.link) };
+      unlisted.add(rest);
+      while (asked.length > 0) {
+        const next = asked[0]!;
+        const target = resolveLink(next.link, { all: next.all });
+        if (target.ok) await add({ ...next, target });
+        else deps.note(`${next.link}: ${target.reason}`);
+        asked.shift();
       }
+      unlisted.delete(rest);
       return "added";
     } finally {
       looking--;
@@ -412,7 +611,7 @@ export async function runAdd(
     };
     recheck = watch;
     queue.on("update", watch);
-    for (const { link, target } of targets) await add(link, target);
+    for (const job of jobs) await add(job);
     for (;;) {
       await new Promise<void>((resolve) => {
         settle = resolve;
@@ -428,6 +627,14 @@ export async function runAdd(
     }
   };
 
+  /** Back in the inbox for whoever owns the library next. */
+  const giveBack = async (): Promise<void> => {
+    for (const rest of unlisted) {
+      const request = rest();
+      if (request) await submitRequest(request, deps.dataDir).catch(() => {});
+    }
+  };
+
   let outcome: "settled" | Stop;
   try {
     const working = work();
@@ -435,8 +642,16 @@ export async function runAdd(
     working.catch(() => {});
     outcome = await Promise.race([working, stopped]);
   } catch (e) {
-    cleanup();
-    return fail(e);
+    // An interrupt reaches the tools this run started too, so the work can
+    // fail from the very signal that has not been heard here yet. A moment
+    // for it to arrive: that was ctrl-c, not a failure.
+    if (!asked) await new Promise((r) => setTimeout(r, SIGNAL_GRACE_MS));
+    if (asked !== "SIGINT" && asked !== "SIGTERM") {
+      cleanup();
+      await giveBack();
+      return fail(e);
+    }
+    outcome = asked;
   }
 
   // Rows left on hold mean the platform stopped the run; read them before
@@ -445,6 +660,7 @@ export async function runAdd(
   const platformHalt =
     s && s.paused > 0 ? s.rateLimitReason || lastHalt || "on hold" : null;
   cleanup(outcome !== "displaced");
+  await giveBack();
 
   if (outcome === "yielded") return done(EXIT.tryLater, "dashboard opened");
   if (outcome === "displaced") {

@@ -52,7 +52,7 @@ npx sndcli add https://soundcloud.com/artist/track
 
 It is the same downloader the dashboard uses, so everything above still holds: songs land in the same folders, nothing downloads twice, and a run that gets cut off picks up where it left off next time. The links you pass go first, ahead of anything an earlier session left unfinished.
 
-A link can be a single song, a playlist, an album, or a SoundCloud likes page. A whole profile is a lot of music to pull in by accident, so `add` only takes one when you add `--all`:
+A link can be a single song, a playlist, an album, a SoundCloud likes page, or everything an artist has posted (their `/tracks` page on SoundCloud, a channel's `/videos` page on YouTube). A whole profile is a lot of music to pull in by accident, so `add` only takes one when you add `--all`:
 
 ```sh
 npx sndcli add https://soundcloud.com/artist --all
@@ -62,15 +62,24 @@ If soundcli is already open, `add` hands the links to it and returns once it has
 
 Run the same line on a schedule to keep a playlist or your likes in step. Each run only fetches what is new.
 
+To follow a link from now on instead, `watch` it. soundcli notes what the link holds today and leaves all of that alone, and `sync` downloads only what shows up later, on every link you watch:
+
+```sh
+npx sndcli watch https://soundcloud.com/artist/tracks --into "Liked Songs"
+npx sndcli sync
+```
+
+`--into` names a folder in your own collection, made if it is not there yet, so an artist's new songs can land right beside your likes. It works on `add` too. Put `sync` on a schedule and one run checks every watched link. `sndcli watch` by itself lists them, and `unwatch` forgets one without touching what it saved.
+
 ### For scripts
 
-With `--json`, every line of output is one JSON object:
+With `--json`, `add` and `sync` print one JSON object per line:
 
 | Event | When | Fields |
 |---|---|---|
 | `link` | A link was read and queued | `link`, `tracks`, `new`, `saved`, plus `unavailable` when songs were left alone and `error` when it could not be read |
 | `track` | A song finished | `status` (`saved`, `exists` or `failed`), `source`, `title`, `artist`, `file`, plus `reason`, `detail` and `permanent` on a failure |
-| `handoff` | The links went to a soundcli that was already running | `owner` (`tui` for the dashboard, `headless` for another `add`) |
+| `handoff` | The links went to a soundcli that was already running | `owner` (`tui` for the dashboard, `headless` for another `add` or `sync`) |
 | `done` | The run is over | `saved`, `exists`, `failed`, `halted`, `exit` |
 
 `done` is always the last line, after a `handoff` too. `halted` is `null` unless the run stopped early, and then it names the reason. Setup messages go to stderr, so stdout carries nothing but these lines.

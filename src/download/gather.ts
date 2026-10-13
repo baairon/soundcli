@@ -2,11 +2,36 @@
 // add flows and by `sndcli add`, so a batch is gathered the same way whoever
 // asked for it.
 
-import { SOURCE_LABELS } from "../library/types";
+import type { Config } from "../config/config";
+import { SOURCE_LABELS, type SourceId } from "../library/types";
+import { ownerForHandle } from "../sources/accounts";
 import { tracksFromUrl } from "../sources/enqueue-url";
+import { ownerFromHandle } from "../sources/handle";
 import { adapterFor, type LinkTarget } from "../sources/resolve-link";
-import type { SourceAdapter, SourcePlaylist } from "../sources/types";
+import type {
+  SourceAdapter,
+  SourcePlaylist,
+  SourceTrack,
+} from "../sources/types";
 import type { DownloadQueue } from "./queue";
+
+type OkTarget = Extract<LinkTarget, { ok: true }>;
+
+/** Re-home a listed track before it is queued, or drop it (undefined). */
+export type Place = (track: SourceTrack) => SourceTrack | undefined;
+
+export interface GatherOptions {
+  front?: boolean;
+  place?: Place;
+}
+
+/** What a caller asked for beyond the link itself. */
+export interface Placement {
+  /** A folder of the user's own collection to save into (see `--into`). */
+  into?: string;
+  /** Ids to leave alone: what a watched link listed before it was watched. */
+  seen?: readonly string[];
+}
 
 export interface GatherResult {
   /** Tracks listed across everything gathered. */
@@ -51,7 +76,7 @@ export async function gatherLists(
   adapter: SourceAdapter,
   lists: SourcePlaylist[],
   onProgress?: (done: number, total: number) => void,
-  opts: { front?: boolean } = {},
+  opts: GatherOptions = {},
 ): Promise<GatherResult> {
   const result = emptyResult();
   const signal = queue.beginGather();
@@ -62,7 +87,7 @@ export async function gatherLists(
       if (signal.aborted) return;
       const pl = lists[cursor++]!;
       try {
-        const tracks = await adapter.listTracks(pl);
+        const tracks = placed(await adapter.listTracks(pl), opts.place);
         if (signal.aborted) return; // canceled mid-fetch: don't revive the queue
         if (tracks.length > 0) {
           const r = queue.enqueue(
@@ -80,7 +105,7 @@ export async function gatherLists(
           result.unavailable += r.unavailable;
         }
       } catch (e) {
-        result.firstError ??= e instanceof Error ? e.message : String(e);
+        result.firstError ??= reason(e);
       }
       gathered++;
       onProgress?.(gathered, lists.length);
@@ -97,6 +122,39 @@ export async function gatherLists(
   return result;
 }
 
+function placed(tracks: SourceTrack[], place?: Place): SourceTrack[] {
+  if (!place) return tracks;
+  return tracks.flatMap((t) => place(t) ?? []);
+}
+
+const NOTHING_PUBLIC = "Nothing public to download there.";
+const UNREADABLE = "Couldn't read that link.";
+
+/**
+ * Why a listing failed, never empty: callers tell a failed link from a fine
+ * one by whether there is a reason, and an error can arrive with no message.
+ */
+function reason(e: unknown): string {
+  return (e instanceof Error ? e.message : String(e)) || UNREADABLE;
+}
+
+/** The adapter for a link that names lists, and the lists it asks for. */
+async function pickLists(
+  target: Extract<OkTarget, { kind: "lists" }>,
+): Promise<{ adapter: SourceAdapter; lists: SourcePlaylist[] }> {
+  const adapter = adapterFor(target.source, target.input);
+  const lists = await adapter.listPlaylists();
+  return {
+    adapter,
+    lists:
+      target.pick === "all"
+        ? lists
+        : target.pick === "liked"
+          ? lists.filter((l) => l.kind === "liked")
+          : lists.slice(0, 1),
+  };
+}
+
 /**
  * Queue whatever a routed link points at: one song read directly, or the
  * lists it names gathered through the source's adapter. Never throws; a link
@@ -104,17 +162,17 @@ export async function gatherLists(
  */
 export async function enqueueTarget(
   queue: DownloadQueue,
-  target: Extract<LinkTarget, { ok: true }>,
-  opts: { front?: boolean } = {},
+  target: OkTarget,
+  opts: GatherOptions = {},
 ): Promise<GatherResult> {
   try {
     if (target.kind === "track") {
-      const tracks = await tracksFromUrl(target.source, target.url);
-      if (tracks.length === 0) {
-        return { ...emptyResult(), firstError: "Couldn't read that link." };
+      const listed = await tracksFromUrl(target.source, target.url);
+      if (listed.length === 0) {
+        return { ...emptyResult(), firstError: UNREADABLE };
       }
       const r = queue.enqueue(
-        tracks.map((t) => ({
+        placed(listed, opts.place).map((t) => ({
           source: target.source,
           sourceLabel: SOURCE_LABELS[target.source],
           track: t,
@@ -124,22 +182,89 @@ export async function enqueueTarget(
       return { ...r, aborted: false };
     }
 
-    const adapter = adapterFor(target.source, target.input);
-    const lists = await adapter.listPlaylists();
-    const picked =
-      target.pick === "all"
-        ? lists
-        : target.pick === "liked"
-          ? lists.filter((l) => l.kind === "liked")
-          : lists.slice(0, 1);
-    if (picked.length === 0) {
-      return { ...emptyResult(), firstError: "Nothing public to download there." };
+    const { adapter, lists } = await pickLists(target);
+    if (lists.length === 0) {
+      return { ...emptyResult(), firstError: NOTHING_PUBLIC };
     }
-    return await gatherLists(queue, adapter, picked, undefined, opts);
+    return await gatherLists(queue, adapter, lists, undefined, opts);
   } catch (e) {
-    return {
-      ...emptyResult(),
-      firstError: e instanceof Error ? e.message : String(e),
-    };
+    return { ...emptyResult(), firstError: reason(e) };
   }
+}
+
+/**
+ * Everything a routed link lists right now, with nothing queued: what a watch
+ * records so that only later arrivals count as new. Throws when any of it
+ * can't be read, since a partial answer would pass old songs off as new ones.
+ */
+export async function listTarget(target: OkTarget): Promise<SourceTrack[]> {
+  if (target.kind === "track") {
+    const listed = await tracksFromUrl(target.source, target.url);
+    if (listed.length === 0) throw new Error(UNREADABLE);
+    return listed;
+  }
+  const { adapter, lists } = await pickLists(target);
+  if (lists.length === 0) throw new Error(NOTHING_PUBLIC);
+  const out: SourceTrack[] = [];
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < lists.length) {
+      out.push(...(await adapter.listTracks(lists[cursor++]!)));
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(5, lists.length) }, () => worker()),
+  );
+  return out;
+}
+
+/**
+ * How a link's tracks are filed when the caller asked for more than the link:
+ * the ones a watch has already seen are dropped, and `into` re-homes the rest
+ * in a folder of the user's own collection. That means their owner, the one
+ * their handle for this source leads to, so a song saved here is the same
+ * library entry a like or a set of theirs would name. Spotify is never
+ * owner-scoped and a generic site keeps its own folder; both only change the
+ * playlist. Undefined when there is nothing to change.
+ */
+export async function placement(
+  source: SourceId,
+  asked: Placement,
+  config: Config,
+): Promise<Place | undefined> {
+  const { into } = asked;
+  const seen = new Set(asked.seen);
+  if (!into && seen.size === 0) return undefined;
+  const handle =
+    source === "youtube"
+      ? config.youtubeHandle
+      : source === "soundcloud"
+        ? config.soundcloudHandle
+        : undefined;
+  const mine =
+    into && handle
+      ? await ownerForHandle(source, ownerFromHandle(handle))
+      : undefined;
+  return (t) => {
+    if (seen.has(t.id)) return undefined;
+    if (!into) return t;
+    return {
+      ...t,
+      owner: source === "link" ? t.owner : mine,
+      playlistTitle: into,
+      // A folder of one's own follows no feed, so it carries no feed order.
+      position: undefined,
+    };
+  };
+}
+
+/** Queue a routed link the way its caller asked for it (see placement). */
+export async function enqueueAsked(
+  queue: DownloadQueue,
+  target: OkTarget,
+  asked: Placement,
+  opts: { front?: boolean } = {},
+): Promise<GatherResult> {
+  const place = await placement(target.source, asked, queue.getConfig());
+  return enqueueTarget(queue, target, { ...opts, place });
 }

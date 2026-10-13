@@ -3,9 +3,10 @@
 // a hold to its boot and a timer.
 
 import { paths } from "../config/paths";
-import { enqueueTarget } from "../download/gather";
+import { enqueueAsked } from "../download/gather";
 import type { DownloadQueue } from "../download/queue";
 import { resolveLink } from "../sources/resolve-link";
+import { askedBy } from "./watches";
 import {
   claimInstance,
   liveOwner,
@@ -52,12 +53,12 @@ export function serveHandoffs(
     const request = await inbox(() => !busy);
     if (request?.kind === "displaced") return false;
     // A yield is meant for a background run; a dashboard keeps its queue.
-    if (request?.kind !== "add") return true;
+    if (request?.kind !== "add" && request?.kind !== "sync") return true;
     busy = true;
     try {
-      for (const link of request.links) {
-        const target = resolveLink(link, { all: request.all });
-        if (target.ok) await enqueueTarget(queue, target);
+      for (const asked of await askedBy(request, dir)) {
+        const target = resolveLink(asked.link, { all: asked.all });
+        if (target.ok) await enqueueAsked(queue, target, asked);
       }
     } finally {
       busy = false;

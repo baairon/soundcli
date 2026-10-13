@@ -3,8 +3,9 @@ import path from "node:path";
 import { downloadLogFile } from "../config/paths";
 import { enumerate, type YtCollection } from "../ytdlp/ytdlp";
 import { linkCollectionTitle, slugTitle } from "../util/format";
+import { accountIdOf, ownerForAccount } from "./accounts";
 import { normalizeHandle, ownerFromHandle } from "./handle";
-import { detectInput } from "./detect";
+import { detectInput, uploadsUrl } from "./detect";
 import type {
   SourceAdapter,
   SourcePlaylist,
@@ -62,7 +63,11 @@ function asUrl(raw: string): string {
   return /^https?:\/\//i.test(s) ? s : `https://${s}`;
 }
 
-export function makeSoundcloud(input?: string): SourceAdapter {
+export function makeSoundcloud(
+  input?: string,
+  /** The account registry file; tests point it at a temp one. */
+  accounts?: string,
+): SourceAdapter {
   const d = input ? detectInput(input) : null;
   let user: string | undefined;
   let owner: string | undefined;
@@ -70,6 +75,9 @@ export function makeSoundcloud(input?: string): SourceAdapter {
 
   if (input && isSetUrl(asUrl(input))) {
     singleUrl = asUrl(input);
+  } else if (input && uploadsUrl(input)) {
+    // An artist's uploads are one list, read like a set.
+    singleUrl = uploadsUrl(input);
   } else if (d?.ok && d.source === "soundcloud") {
     if (d.kind === "profile") {
       user = d.value;
@@ -88,15 +96,34 @@ export function makeSoundcloud(input?: string): SourceAdapter {
   let likesCache: YtCollection | undefined;
   async function getLikes(): Promise<YtCollection> {
     if (!user) throw new Error("enter your SoundCloud handle first.");
-    if (!likesCache)
-      likesCache = await enumerate(`https://soundcloud.com/${user}/likes`, {});
+    if (!likesCache) {
+      const likes = await enumerate(`https://soundcloud.com/${user}/likes`, {});
+      await nameOwner(likes);
+      likesCache = likes;
+    }
     return likesCache;
+  }
+
+  // The handle only found the account. Once one of the profile's own feeds
+  // names its id, the owner is whoever that id was first seen as, so a
+  // renamed handle keeps its folders (see accounts).
+  let named: Promise<void> | undefined;
+  function nameOwner(col: YtCollection): Promise<void> | undefined {
+    const id = accountIdOf("soundcloud", col);
+    if (!id || !owner) return named;
+    return (named ??= ownerForAccount("soundcloud", id, owner, accounts).then(
+      (o) => {
+        owner = o;
+      },
+    ));
   }
 
   return {
     id: "soundcloud",
     label: "SoundCloud",
-    owner,
+    get owner() {
+      return owner;
+    },
 
     async listPlaylists(): Promise<SourcePlaylist[]> {
       if (singleUrl) {
@@ -150,6 +177,7 @@ export function makeSoundcloud(input?: string): SourceAdapter {
       // Sets the user created themselves (a short list, fast to fetch).
       try {
         const sets = await enumerate(`https://soundcloud.com/${user}/sets`, {});
+        await nameOwner(sets);
         for (const e of sets.entries) {
           const url =
             e.url ??

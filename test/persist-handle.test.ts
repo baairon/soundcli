@@ -88,6 +88,18 @@ describe("persistDecision", () => {
   });
 });
 
+describe("an uploads link", () => {
+  it("is never saved as the user's own handle", () => {
+    // It names someone else's posts, not whose library this is.
+    expect(
+      persistDecision("soundcloud", "https://soundcloud.com/vesper/tracks"),
+    ).toEqual({ persist: false, reason: "resource" });
+    expect(
+      persistDecision("youtube", "https://www.youtube.com/@Vesper/videos"),
+    ).toEqual({ persist: false, reason: "resource" });
+  });
+});
+
 describe("persistableHandle", () => {
   it("matches persistDecision", () => {
     expect(persistableHandle("youtube", "@lumen")).toBe("lumen");

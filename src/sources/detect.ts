@@ -279,7 +279,24 @@ export function effectiveKind(
   if (d.source === "soundcloud" && /\/sets\/[^/?#]+/.test(raw)) {
     return "collection";
   }
+  if (uploadsUrl(raw)) return "collection";
   return d.kind;
+}
+
+/**
+ * An artist's own uploads, as the one list it is: SoundCloud's /tracks tab or
+ * a YouTube channel's /videos tab. yt-dlp reads either as it stands, so the
+ * link routes like a playlist instead of opening the whole profile. Returns
+ * the canonical URL, or undefined for any other link.
+ */
+export function uploadsUrl(raw: string): string | undefined {
+  const m = withProtocol(raw).match(
+    /^https?:\/\/(?:www\.|m\.|music\.)?(?:soundcloud\.com\/([^/?#]+)\/tracks|youtube\.com\/(@[^/?#]+)\/videos)\/?(?:[?#].*)?$/i,
+  );
+  if (!m) return undefined;
+  return m[1]
+    ? `https://soundcloud.com/${m[1]}/tracks`
+    : `https://www.youtube.com/${m[2]}/videos`;
 }
 
 export type PasteLinkResult =

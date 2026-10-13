@@ -82,6 +82,10 @@ export interface YtCollection {
   id?: string;
   title?: string;
   uploader?: string;
+  /** The channel a YouTube listing belongs to. */
+  channelId?: string;
+  /** Which extractor answered, e.g. "SoundcloudUser" for a profile's feeds. */
+  extractorKey?: string;
   entries: YtEntry[];
 }
 
@@ -138,6 +142,8 @@ export async function enumerate(
       id: data.id as string | undefined,
       title: data.title as string | undefined,
       uploader: (data.uploader as string) ?? (data.uploader_id as string),
+      channelId: data.channel_id as string | undefined,
+      extractorKey: data.extractor_key as string | undefined,
       entries: entries
         .filter((e): e is Record<string, unknown> => Boolean(e))
         .map(toEntry),

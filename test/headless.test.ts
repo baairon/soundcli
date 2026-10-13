@@ -19,10 +19,15 @@ import { downloadTrack } from "../src/ytdlp/ytdlp";
 import {
   EXIT,
   runAdd,
+  runSync,
+  runUnwatch,
+  runWatch,
   type HeadlessDeps,
   type HeadlessEvent,
   type StopSignal,
 } from "../src/cli/headless";
+import { loadWatches } from "../src/cli/watches";
+import { listTarget } from "../src/download/gather";
 import {
   claimInstance,
   liveOwner,
@@ -65,6 +70,7 @@ function deps(over: Partial<HeadlessDeps> = {}): HeadlessDeps {
       queue = new DownloadQueue(defaultConfig, library, 2);
       return { queue, library };
     },
+    list: (target) => listTarget(target),
     signals: (onSignal) => {
       signal = onSignal;
       return () => {};
@@ -487,5 +493,295 @@ describe("runAdd", () => {
     );
     expect(code).toBe(EXIT.tryLater);
     expect(events().at(-1)).toMatchObject({ saved: 1, halted: "bot gate" });
+  });
+});
+
+describe("--into, watch and sync", () => {
+  const UPLOADS = "https://soundcloud.com/vesper/tracks";
+  const SINGLE = "https://soundcloud.com/vesper/low-tide";
+
+  /** What the artist has posted so far, as their uploads tab lists it. */
+  function uploads(...ids: string[]): void {
+    enumerateMock.mockImplementation(async (url: string) => {
+      if (url !== UPLOADS) {
+        const slug = url.split("/").pop()!;
+        return { entries: [{ id: slug, title: slug, url }] };
+      }
+      return {
+        title: "Vesper (Tracks)",
+        entries: ids.map((id) => ({
+          id,
+          title: `Song ${id}`,
+          url: `https://soundcloud.com/vesper/song-${id}`,
+        })),
+      };
+    });
+  }
+
+  /** A run whose user has this SoundCloud handle configured. */
+  const as = (soundcloudHandle?: string): Partial<HeadlessDeps> => ({
+    boot: async () => {
+      const library = {
+        has: () => false,
+        get: () => undefined,
+        all: () => [],
+        upsert: async () => {},
+        flushSync: () => {},
+      } as unknown as Library;
+      queue = new DownloadQueue({ ...defaultConfig, soundcloudHandle }, library, 2);
+      return { queue, library };
+    },
+  });
+
+  const downloaded = () =>
+    vi.mocked(downloadTrack).mock.calls.map(([p]) => ({
+      url: p.url,
+      owner: p.owner,
+      folder: p.playlistName,
+    }));
+
+  it("saves into a folder of your own collection", async () => {
+    downloadsSucceed();
+    const code = await runAdd(
+      { links: [SINGLE], all: false, json: true, into: "Drops" },
+      deps(as("Lumen")),
+    );
+    expect(code).toBe(EXIT.ok);
+    // Yours, not the artist's the link names: a like of the same song later
+    // is this same library entry.
+    expect(downloaded()).toEqual([{ url: SINGLE, owner: "lumen", folder: "Drops" }]);
+  });
+
+  it("uses a plain folder when no handle says whose collection it is", async () => {
+    downloadsSucceed();
+    await runAdd(
+      { links: [SINGLE], all: false, json: true, into: "Drops" },
+      deps(as(undefined)),
+    );
+    expect(downloaded()).toEqual([{ url: SINGLE, owner: undefined, folder: "Drops" }]);
+  });
+
+  it("reads an artist's uploads as one list", async () => {
+    downloadsSucceed();
+    uploads("1", "2");
+    const code = await runAdd({ links: [UPLOADS], all: false, json: true }, deps());
+    expect(code).toBe(EXIT.ok);
+    expect(events()[0]).toEqual({
+      event: "link",
+      link: UPLOADS,
+      tracks: 2,
+      new: 2,
+      saved: 0,
+    });
+  });
+
+  it("leaves alone what a link held when it was watched, and takes what came after", async () => {
+    uploads("1", "2");
+    expect(
+      await runWatch({ links: [UPLOADS], all: false, into: "Liked Songs" }, deps()),
+    ).toBe(EXIT.ok);
+    expect(await loadWatches(dir)).toMatchObject([
+      { link: UPLOADS, all: false, into: "Liked Songs", seen: ["1", "2"] },
+    ]);
+
+    out = [];
+    downloadsSucceed();
+    uploads("3", "1", "2");
+    const code = await runSync({ json: true }, deps(as("lumen")));
+
+    expect(code).toBe(EXIT.ok);
+    expect(events()[0]).toEqual({
+      event: "link",
+      link: UPLOADS,
+      tracks: 1,
+      new: 1,
+      saved: 0,
+    });
+    expect(downloaded()).toEqual([
+      {
+        url: "https://soundcloud.com/vesper/song-3",
+        owner: "lumen",
+        folder: "Liked Songs",
+      },
+    ]);
+    expect(events().at(-1)).toMatchObject({ event: "done", saved: 1, exit: 0 });
+  });
+
+  it("keeps what a watch has seen when it is watched again", async () => {
+    uploads("1");
+    await runWatch({ links: [UPLOADS], all: false }, deps());
+    uploads("1", "2");
+    await runWatch({ links: [`${UPLOADS}/`], all: false, into: "Drops" }, deps());
+
+    // Only where it saves changed: song 2 was posted since and still counts.
+    expect(await loadWatches(dir)).toMatchObject([
+      { link: UPLOADS, into: "Drops", seen: ["1"] },
+    ]);
+  });
+
+  it("watches nothing when the link can't be read", async () => {
+    enumerateMock.mockRejectedValue(new Error("HTTP Error 404: Not Found"));
+    const code = await runWatch({ links: [UPLOADS], all: false }, deps());
+    expect(code).toBe(EXIT.failed);
+    expect(notes.join("\n")).toContain("404");
+    expect(await loadWatches(dir)).toEqual([]);
+  });
+
+  it("refuses to watch a bad link before reading anything", async () => {
+    const code = await runWatch({ links: ["lumen"], all: false }, deps());
+    expect(code).toBe(EXIT.usage);
+    expect(enumerateMock).not.toHaveBeenCalled();
+  });
+
+  it("lists and forgets watches", async () => {
+    uploads("1");
+    await runWatch({ links: [UPLOADS], all: false, into: "Drops" }, deps());
+    out = [];
+    expect(await runWatch({ links: [], all: false }, deps())).toBe(EXIT.ok);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain(UPLOADS);
+    expect(out[0]).toContain('"Drops"');
+
+    expect(await runUnwatch({ links: [UPLOADS] }, deps())).toBe(EXIT.ok);
+    expect(await loadWatches(dir)).toEqual([]);
+    // Nothing by that link any more: say so, and say it with the exit code.
+    expect(await runUnwatch({ links: [UPLOADS] }, deps())).toBe(EXIT.failed);
+  });
+
+  it("syncs to a clean finish when nothing is watched", async () => {
+    const code = await runSync({ json: true }, deps());
+    expect(code).toBe(EXIT.ok);
+    expect(events()).toEqual([
+      { event: "done", saved: 0, exists: 0, failed: 0, halted: null, exit: 0 },
+    ]);
+    expect(notes.join("\n")).toContain("Nothing is watched");
+  });
+
+  it("hands a sync to a running soundcli as a sync, not as its links", async () => {
+    uploads("1");
+    await runWatch({ links: [UPLOADS], all: false }, deps());
+    out = [];
+    const owner = await claimInstance("tui", dir);
+    const reader = setInterval(() => void owner!.touch(), 20);
+    const run = runSync({ json: true }, deps({ tickMs: 30 }));
+    await vi.waitFor(async () =>
+      expect(await fs.readdir(path.join(dir, "inbox"))).toHaveLength(1),
+    );
+    // The owner reads the watch list itself when it serves the request.
+    expect(await takeRequest(dir)).toEqual({ kind: "sync" });
+    expect(await run).toBe(EXIT.ok);
+    expect(events()[0]).toEqual({ event: "handoff", owner: "tui" });
+    clearInterval(reader);
+    owner!.release();
+  });
+
+  it("serves a sync handed over mid-run from the watch list", async () => {
+    uploads("1");
+    await runWatch({ links: [UPLOADS], all: false, into: "Drops" }, deps());
+    out = [];
+    downloadsSucceed();
+    uploads("2", "1");
+    // A run busy with its own link when another process asks for a sync.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    vi.mocked(downloadTrack).mockImplementation(async (p) => {
+      if (p.url === SONG) await held;
+      return {
+        status: "downloaded",
+        meta: { id: p.url.split("/").pop()!, title: "t", artist: "a", filepath: "/f.m4a" },
+      };
+    });
+    const run = runAdd({ links: [SONG], all: false, json: true }, deps());
+    await vi.waitFor(() => expect(events().some((e) => e.event === "link")).toBe(true));
+    await submitRequest({ kind: "sync" }, dir);
+    await vi.waitFor(() =>
+      expect(events().filter((e) => e.event === "link")).toHaveLength(2),
+    );
+    release();
+
+    expect(await run).toBe(EXIT.ok);
+    expect(events().filter((e) => e.event === "link")[1]).toMatchObject({
+      link: UPLOADS,
+      tracks: 1,
+    });
+    expect(downloaded().map((d) => d.folder)).toContain("Drops");
+  });
+});
+
+describe("watch, on a link that cannot change", () => {
+  it("refuses a single song and points at add", async () => {
+    const code = await runWatch({ links: [SONG], all: false }, deps());
+    expect(code).toBe(EXIT.usage);
+    expect(notes.join("\n")).toContain("sndcli add");
+    expect(await loadWatches(dir)).toEqual([]);
+  });
+});
+
+describe("the word of a run that is stopped or let down", () => {
+  it("prints nothing after done, whatever was still in flight", async () => {
+    // A link still being read when ctrl-c lands: its line must not follow done.
+    let finish: (() => void) | undefined;
+    enumerateMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ entries: [{ id: "a", title: "a", url: SONG }] });
+        }),
+    );
+    const run = runAdd({ links: [SONG], all: false, json: true }, deps());
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    signal("SIGINT");
+    expect(await run).toBe(EXIT.interrupted);
+    finish!();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(events().at(-1)).toMatchObject({ event: "done", exit: 130 });
+  });
+
+  it("exits 130 when the interrupt that broke setup lands a moment after it", async () => {
+    // Ctrl-C reaches the tools soundcli started too, so setup can fail from
+    // the very interrupt whose signal has not been heard yet.
+    const code = await runAdd(
+      { links: [SONG], all: false, json: true },
+      deps({
+        boot: () =>
+          new Promise((_, reject) =>
+            setTimeout(() => {
+              reject(new Error("Command was killed with SIGINT"));
+              setTimeout(() => signal("SIGINT"), 5);
+            }, 5),
+          ),
+      }),
+    );
+    expect(code).toBe(EXIT.interrupted);
+    expect(events().at(-1)).toMatchObject({
+      event: "done",
+      halted: "interrupted",
+      exit: 130,
+    });
+  });
+
+  it("counts a link that failed without saying why", async () => {
+    enumerateMock.mockRejectedValue(new Error(""));
+    const code = await runAdd({ links: [SONG], all: false, json: true }, deps());
+    expect(code).toBe(EXIT.failed);
+    expect((events()[0] as { error?: string }).error).toBeTruthy();
+  });
+
+  it("waits for a claim that is still being written instead of giving up", async () => {
+    // An owner's create and its write are two steps, and a loaded machine can
+    // sit between them: the claim is there and still empty.
+    const claim = path.join(dir, "instance.json");
+    await fs.writeFile(claim, "");
+    setTimeout(
+      () =>
+        void fs.writeFile(
+          claim,
+          JSON.stringify({ pid: process.pid, kind: "tui", startedAt: "x" }),
+        ),
+      60,
+    );
+    const code = await runAdd({ links: [SONG], all: false, json: true }, deps());
+    expect(notes).toEqual([]);
+    expect(code).toBe(EXIT.ok);
+    expect(events()[0]).toEqual({ event: "handoff", owner: "tui" });
   });
 });
