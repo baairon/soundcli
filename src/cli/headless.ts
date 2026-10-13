@@ -76,6 +76,8 @@ export type HeadlessEvent =
       tracks: number;
       new: number;
       saved: number;
+      /** Songs left alone because they failed for good not long ago. */
+      unavailable?: number;
       error?: string;
     }
   | {
@@ -174,6 +176,7 @@ function describe(e: HeadlessEvent): string {
       return (
         `${e.link}: ${plural(e.tracks, "track")}, ${e.new.toLocaleString()} to download, ` +
         `${e.saved.toLocaleString()} already saved` +
+        (e.unavailable ? `, ${e.unavailable.toLocaleString()} unavailable` : "") +
         (e.error ? ` (some lists failed: ${e.error})` : "")
       );
     case "track": {
@@ -338,6 +341,7 @@ export async function runAdd(
         tracks: r.total,
         new: r.newTracks,
         saved: r.alreadySaved,
+        unavailable: r.unavailable || undefined,
         // yt-dlp repeats the whole message inside a trailing "(caused by ...)".
         error: r.firstError?.split(" (caused by ")[0],
       });

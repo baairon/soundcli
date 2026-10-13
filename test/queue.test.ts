@@ -38,6 +38,7 @@ vi.mock("../src/util/recover-path", async (importOriginal) => {
 import { downloadTrack, enumerate } from "../src/ytdlp/ytdlp";
 import {
   blockedBackoffMs,
+  deadWaitMs,
   DownloadQueue,
   isPermanentTrackError,
   SOURCE_BLOCKING,
@@ -799,6 +800,80 @@ describe("download queue YouTube pacing", () => {
     const q = new DownloadQueue(defaultConfig, emptyLib(), 3);
     q.enqueue([byUrl("a"), byUrl("b")]);
     await vi.waitFor(() => expect(q.stats().done).toBe(2));
+  });
+});
+
+describe("download queue dead tracks", () => {
+  const DAY = 86_400_000;
+  const drm = "ERROR: [soundcloud] 900000008: This video is DRM protected";
+  const lib = (): Library =>
+    ({ has: () => false, all: () => [], upsert: async () => {} }) as unknown as Library;
+  /** A saved queue that remembers "a" failing for good `daysAgo` days back. */
+  const remembering = (daysAgo: number) => ({
+    items: [],
+    youtubeStarts: [],
+    dead: { "youtube:a": { fails: 1, last: Date.now() - daysAgo * DAY, error: drm } },
+  });
+
+  afterEach(() => {
+    vi.mocked(downloadTrack).mockReset();
+    vi.mocked(downloadTrack).mockImplementation(() => new Promise(() => {}));
+  });
+
+  it("waits a day, doubling: a month at most for a named reason, three days for a bare miss", () => {
+    const days = (fails: number, error = drm): number =>
+      deadWaitMs({ fails, last: 0, error }) / DAY;
+    expect([1, 2, 3, 9].map((n) => days(n))).toEqual([1, 2, 4, 30]);
+    expect(days(9, "HTTP Error 404: Not Found")).toBe(3);
+  });
+
+  it("leaves a remembered track alone until F asks for it", async () => {
+    const q = new DownloadQueue(defaultConfig, lib(), 1);
+    q.restore(remembering(0));
+    expect(q.enqueue([byUrl("a")])).toMatchObject({ added: 0, unavailable: 1 });
+    expect(q.getItems()[0]).toMatchObject({ status: "error", remembered: true });
+    // Listed again in the same batch, it gets no second row.
+    expect(q.enqueue([byUrl("a")])).toMatchObject({ unavailable: 0, skipped: 1 });
+
+    q.retryFailed();
+    expect(downloadTrack).not.toHaveBeenCalled();
+    q.retryFailed(true);
+    await vi.waitFor(() => expect(downloadTrack).toHaveBeenCalledTimes(1));
+    q.cancelAll();
+  });
+
+  it("tries it again once the wait is up, and a success forgets it", async () => {
+    vi.mocked(downloadTrack).mockRejectedValue(new Error(drm));
+    const q = new DownloadQueue(defaultConfig, lib(), 1);
+    q.restore(remembering(2));
+    expect(q.enqueue([byUrl("a")])).toMatchObject({ added: 1, unavailable: 0 });
+    await vi.waitFor(() => expect(q.stats().failed).toBe(1));
+    q.clearFinished();
+    // It failed again just now, so the next listing leaves it alone.
+    expect(q.enqueue([byUrl("a")])).toMatchObject({ unavailable: 1 });
+
+    vi.mocked(downloadTrack).mockResolvedValue({
+      status: "downloaded",
+      meta: { id: "a", title: "a", filepath: "/x/a" },
+    });
+    q.retryFailed(true);
+    await vi.waitFor(() => expect(q.stats().done).toBe(1));
+    q.clearFinished();
+    expect(q.enqueue([byUrl("a")])).toMatchObject({ added: 1, unavailable: 0 });
+    q.cancelAll();
+  });
+
+  it("stops remembering bare misses once the downloader looks stale", async () => {
+    vi.mocked(downloadTrack).mockRejectedValue(new Error("HTTP Error 404: Not Found"));
+    const q = new DownloadQueue(defaultConfig, lib(), 1);
+    const batch = ["a", "b", "c", "d", "e", "f"].map((id) => byUrl(id));
+    q.enqueue(batch);
+    await vi.waitFor(() => expect(q.stats().failed).toBe(6));
+    q.clearFinished();
+    // The fifth miss in a row raised the notice: from there the tool is the
+    // suspect, not the tracks.
+    expect(q.enqueue(batch)).toMatchObject({ unavailable: 4, added: 2 });
+    q.cancelAll();
   });
 });
 

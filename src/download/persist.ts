@@ -20,11 +20,19 @@ export interface PersistedItem {
   unverifiedMatch?: boolean;
 }
 
+/** A track that failed for good: how often in a row, when last, and why. */
+export interface DeadTrack {
+  fails: number;
+  last: number;
+  error: string;
+}
+
 interface QueueSnapshot {
   version: 1;
   items: PersistedItem[];
   /** Absent in a file written before the pacing budget was saved. */
   youtubeStarts?: number[];
+  dead?: Record<string, DeadTrack>;
 }
 
 /** What a saved queue brings back. */
@@ -36,6 +44,8 @@ export interface SavedQueue {
    * would open with a full burst.
    */
   youtubeStarts: number[];
+  /** Tracks that failed for good, by library id (see the queue's `dead`). */
+  dead?: Record<string, DeadTrack>;
 }
 
 /**
@@ -92,29 +102,32 @@ export function restorableItems(
   );
 }
 
-function snapshot(items: QueueItem[], youtubeStarts: number[]): string {
-  const all: QueueSnapshot = { version: 1, items: snapshotItems(items), youtubeStarts };
+function snapshot(items: QueueItem[], rest: Omit<SavedQueue, "items">): string {
+  const all: QueueSnapshot = { version: 1, items: snapshotItems(items), ...rest };
   return JSON.stringify(all, null, 2);
 }
 
 export async function saveQueue(
   items: QueueItem[],
-  youtubeStarts: number[],
+  rest: Omit<SavedQueue, "items">,
 ): Promise<void> {
   // The suite runs real queues, and every one of them would otherwise
   // overwrite the user's own saved queue with its fixtures.
   if (process.env.VITEST) return;
   await fs.mkdir(path.dirname(queueFile), { recursive: true });
   const tmp = `${queueFile}.tmp`;
-  await fs.writeFile(tmp, snapshot(items, youtubeStarts), "utf8");
+  await fs.writeFile(tmp, snapshot(items, rest), "utf8");
   await fs.rename(tmp, queueFile);
 }
 
 /** Synchronous save for app quit, so a partial download survives even on exit. */
-export function saveQueueSync(items: QueueItem[], youtubeStarts: number[]): void {
+export function saveQueueSync(
+  items: QueueItem[],
+  rest: Omit<SavedQueue, "items">,
+): void {
   if (process.env.VITEST) return;
   mkdirSync(path.dirname(queueFile), { recursive: true });
-  writeFileSync(queueFile, snapshot(items, youtubeStarts), "utf8");
+  writeFileSync(queueFile, snapshot(items, rest), "utf8");
 }
 
 export async function loadQueue(): Promise<SavedQueue> {
@@ -126,6 +139,7 @@ export async function loadQueue(): Promise<SavedQueue> {
       return {
         items: parsed.items,
         youtubeStarts: Array.isArray(starts) ? starts : [],
+        dead: parsed.dead,
       };
     }
   } catch {

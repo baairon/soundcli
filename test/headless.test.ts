@@ -267,6 +267,27 @@ describe("runAdd", () => {
     enqueue.mockRestore();
   });
 
+  it("leaves a remembered dead track alone and says so on the link line", async () => {
+    const d = deps();
+    const boot: HeadlessDeps["boot"] = async (note) => {
+      const engine = await d.boot(note);
+      const dead = { fails: 1, last: Date.now(), error: "This video is DRM protected" };
+      engine.queue.restore({
+        items: [],
+        youtubeStarts: [],
+        dead: { "soundcloud:lumen:velvet-signal": dead },
+      });
+      return engine;
+    };
+    const cmd = { links: [SONG], all: false, json: true };
+    expect(await runAdd(cmd, { ...d, boot })).toBe(EXIT.ok);
+    expect(events()).toEqual([
+      { event: "link", link: SONG, tracks: 1, new: 0, saved: 0, unavailable: 1 },
+      { event: "done", saved: 0, exists: 0, failed: 0, halted: null, exit: 0 },
+    ]);
+    expect(downloadTrack).not.toHaveBeenCalled();
+  });
+
   it("exits 75 with the reason when the platform stops the queue", async () => {
     vi.mocked(downloadTrack).mockResolvedValue({
       status: "ratelimited",

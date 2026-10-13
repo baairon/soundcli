@@ -22,6 +22,7 @@ import {
   restorableItems,
   saveQueue,
   saveQueueSync,
+  type DeadTrack,
   type SavedQueue,
 } from "./persist";
 
@@ -58,6 +59,8 @@ export interface QueueItem {
   retrying?: boolean;
   /** Queued ahead of the line (see enqueue's `front`). */
   front?: boolean;
+  /** Failed for good before and left alone this time: no attempt was made. */
+  remembered?: boolean;
 }
 
 export interface EnqueueInput {
@@ -253,6 +256,27 @@ export function isPermanentTrackError(text: string): boolean {
   );
 }
 
+/** A failed row no retry can fix this session. */
+function isDead(i: QueueItem): boolean {
+  return i.status === "error" && isPermanentTrackError(i.error ?? "");
+}
+
+/**
+ * A reason the platform itself named, as opposed to a bare "unavailable" or
+ * 404, which is also all a stale downloader has to say.
+ */
+const NAMED_REASON = /drm|private|removed|\bage\b|country|geo.?restrict/i;
+
+/**
+ * How long a track that failed for good is left alone: a day, doubling each
+ * time it fails again. A named reason can wait a month; a bare miss gets
+ * another look within three days, in case the downloader was the broken part.
+ */
+export function deadWaitMs(dead: DeadTrack): number {
+  const capDays = NAMED_REASON.test(dead.error) ? 30 : 3;
+  return Math.min(capDays, 2 ** (dead.fails - 1)) * 24 * HOUR_MS;
+}
+
 /**
  * Which halt a streak earned. Dead tracks never count toward one (see
  * isPermanentTrackError), so it is either a source refusing the bytes or
@@ -301,6 +325,8 @@ export class DownloadQueue extends EventEmitter {
   private youtubeStarts: number[] = [];
   /** Wakes pump() when the pacing gap closes with only YouTube work waiting. */
   private paceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Tracks that failed for good, by library id, so a re-add leaves them alone. */
+  private dead: Record<string, DeadTrack> = {};
   /** Consecutive permanent (dead-track) failures, per source label. */
   private permanentStreaks = new Map<string, number>();
   /**
@@ -344,8 +370,13 @@ export class DownloadQueue extends EventEmitter {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void saveQueue(this.items, this.youtubeStarts).catch(() => {});
+      void saveQueue(this.items, this.saved()).catch(() => {});
     }, 300);
+  }
+
+  /** What is saved beside the rows. */
+  private saved(): Omit<SavedQueue, "items"> {
+    return { youtubeStarts: this.youtubeStarts, dead: this.dead };
   }
 
   updateConfig(config: Config): void {
@@ -615,15 +646,17 @@ export class DownloadQueue extends EventEmitter {
   /**
    * Re-queue every failure a retry could fix (clears the error). Dead tracks
    * stay failed: yt-dlp only updates at launch, so this session would fail
-   * them the same way again.
+   * them the same way again. `all` takes them too, remembered ones included,
+   * for when something outside changed (a VPN, a sign-in, a re-upload).
    */
-  retryFailed(): void {
+  retryFailed(all = false): void {
     let any = false;
     for (const i of this.items) {
-      if (i.status === "error" && !isPermanentTrackError(i.error ?? "")) {
+      if (i.status === "error" && (all || !isDead(i))) {
         i.status = "pending";
         i.error = undefined;
         i.percent = 0;
+        i.remembered = undefined;
         any = true;
       }
     }
@@ -819,6 +852,12 @@ export class DownloadQueue extends EventEmitter {
     this.youtubeStarts = saved.youtubeStarts
       .filter((t) => t <= now && now - t < HOUR_MS)
       .sort((a, b) => a - b);
+    // A dead track nothing has listed for 90 days is forgotten.
+    for (const [id, d] of Object.entries(saved.dead ?? {})) {
+      if (typeof d?.last === "number" && now - d.last < 2160 * HOUR_MS) {
+        this.dead[id] = d;
+      }
+    }
     for (const p of restorableItems(saved.items, this.library)) {
       this.items.push({
         id: `q${++counter}`,
@@ -846,7 +885,7 @@ export class DownloadQueue extends EventEmitter {
     for (const c of this.controllers.values()) c.abort();
     if (!save) return;
     try {
-      saveQueueSync(this.items, this.youtubeStarts);
+      saveQueueSync(this.items, this.saved());
     } catch {
       // best effort on exit
     }
@@ -953,6 +992,8 @@ export class DownloadQueue extends EventEmitter {
     skipped: number;
     alreadySaved: number;
     newTracks: number;
+    /** Tracks left alone because they failed for good not long ago. */
+    unavailable: number;
   } {
     if (this.items.length === 0) {
       this.clearedDone = 0;
@@ -983,6 +1024,9 @@ export class DownloadQueue extends EventEmitter {
       ) {
         blocked.add(libId(i.source, i.track.id, i.track.owner));
         signatures.add(trackSignature({ ...i.track, source: i.source }));
+      } else if (isDead(i)) {
+        // The same track only: the same song from another source may work.
+        blocked.add(libId(i.source, i.track.id, i.track.owner));
       }
     }
 
@@ -990,6 +1034,8 @@ export class DownloadQueue extends EventEmitter {
     let skipped = 0;
     let alreadySaved = 0;
     let newTracks = 0;
+    let unavailable = 0;
+    const now = Date.now();
     // Feed positions to restamp onto already-saved tracks: "download all"
     // re-lists every playlist, so each pass self-heals stored order for free.
     const heals: Track[] = [];
@@ -999,6 +1045,7 @@ export class DownloadQueue extends EventEmitter {
       const sig = trackSignature({ ...inp.track, source: inp.source });
       const inLibrary = this.library.has(id);
       const existing = inLibrary ? this.library.get(id) : undefined;
+      const dead = this.dead[id];
       if (
         existing &&
         !blocked.has(id) &&
@@ -1029,6 +1076,21 @@ export class DownloadQueue extends EventEmitter {
           heals.push({ ...existing, playlistPos: inp.track.position });
         }
         skipped++;
+        continue;
+      } else if (dead && now < dead.last + deadWaitMs(dead)) {
+        // Failed for good and not due another look: a settled row, no attempt.
+        this.items.push({
+          id: `q${++counter}`,
+          source: inp.source,
+          sourceLabel: inp.sourceLabel,
+          track: inp.track,
+          status: "error",
+          percent: 0,
+          error: dead.error,
+          remembered: true,
+        });
+        blocked.add(id);
+        unavailable++;
         continue;
       } else {
         newTracks++;
@@ -1067,7 +1129,8 @@ export class DownloadQueue extends EventEmitter {
     this.emit("update");
     this.scheduleSave();
     this.pump();
-    return { total: inputs.length, added, skipped, alreadySaved, newTracks };
+    const total = inputs.length;
+    return { total, added, skipped, alreadySaved, newTracks, unavailable };
   }
 
   /** Milliseconds until the next YouTube-backed download may start; 0 is now. */
@@ -1437,6 +1500,7 @@ export class DownloadQueue extends EventEmitter {
               };
           await this.library.upsert(track);
           saved = track;
+          delete this.dead[libId(item.source, item.track.id, item.track.owner)];
           item.percent = 100;
           item.status = "done";
           this.consecutiveErrors = 0;
@@ -1474,14 +1538,18 @@ export class DownloadQueue extends EventEmitter {
         );
         this.onRateLimited(reason);
       }
-      if (
-        isPermanentTrackError(item.error) &&
-        !isSourceBlockedError(item.error) &&
-        !/drm|private|removed|\bage\b|country|geo.?restrict/i.test(item.error)
-      ) {
+      if (isDead(item) && !isSourceBlockedError(item.error)) {
+        const named = NAMED_REASON.test(item.error);
         // Only bare misses (unavailable, 404) hint at a stale extractor; a
         // platform naming the reason is telling the truth about that one track.
-        this.notePermanentFailure(item.sourceLabel);
+        if (!named) this.notePermanentFailure(item.sourceLabel);
+        // Left alone from here (see deadWaitMs), unless that hint is up: then
+        // the downloader may be what is broken, not the track.
+        if (named || this.failingSource !== item.sourceLabel) {
+          const id = libId(item.source, item.track.id, item.track.owner);
+          const fails = (this.dead[id]?.fails ?? 0) + 1;
+          this.dead[id] = { fails, last: Date.now(), error: item.error };
+        }
       }
     } finally {
       this.controllers.delete(item.id);

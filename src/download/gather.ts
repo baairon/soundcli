@@ -17,6 +17,8 @@ export interface GatherResult {
   alreadySaved: number;
   /** Tracks that need a real download. */
   newTracks: number;
+  /** Tracks left alone because they failed for good not long ago. */
+  unavailable: number;
   /** The first listing failure, for callers that end up with nothing queued. */
   firstError?: string;
   /** The queue was canceled or cleared while lists were still loading. */
@@ -24,7 +26,14 @@ export interface GatherResult {
 }
 
 function emptyResult(): GatherResult {
-  return { total: 0, added: 0, alreadySaved: 0, newTracks: 0, aborted: false };
+  return {
+    total: 0,
+    added: 0,
+    alreadySaved: 0,
+    newTracks: 0,
+    unavailable: 0,
+    aborted: false,
+  };
 }
 
 /**
@@ -68,6 +77,7 @@ export async function gatherLists(
           result.added += r.added;
           result.alreadySaved += r.alreadySaved;
           result.newTracks += r.newTracks;
+          result.unavailable += r.unavailable;
         }
       } catch (e) {
         result.firstError ??= e instanceof Error ? e.message : String(e);
@@ -111,13 +121,7 @@ export async function enqueueTarget(
         })),
         opts,
       );
-      return {
-        total: r.total,
-        added: r.added,
-        alreadySaved: r.alreadySaved,
-        newTracks: r.newTracks,
-        aborted: false,
-      };
+      return { ...r, aborted: false };
     }
 
     const adapter = adapterFor(target.source, target.input);
