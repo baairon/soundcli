@@ -21,6 +21,7 @@ import {
   runAdd,
   type HeadlessDeps,
   type HeadlessEvent,
+  type StopSignal,
 } from "../src/cli/headless";
 import {
   claimInstance,
@@ -39,6 +40,10 @@ let dir: string;
 let out: string[];
 let notes: string[];
 let flushed: number;
+/** Delivers a signal to the run in flight, as the OS would. */
+let signal: (s: StopSignal) => void;
+/** The queue the latest run booted. */
+let queue: DownloadQueue;
 
 /** A real queue over an empty in-memory library, with fast inbox ticks. */
 function deps(over: Partial<HeadlessDeps> = {}): HeadlessDeps {
@@ -56,10 +61,14 @@ function deps(over: Partial<HeadlessDeps> = {}): HeadlessDeps {
     tickMs: 20,
     out: (line) => out.push(line),
     note: (line) => notes.push(line),
-    boot: async () => ({
-      queue: new DownloadQueue(defaultConfig, library, 2),
-      library,
-    }),
+    boot: async () => {
+      queue = new DownloadQueue(defaultConfig, library, 2);
+      return { queue, library };
+    },
+    signals: (onSignal) => {
+      signal = onSignal;
+      return () => {};
+    },
     ...over,
   };
 }
@@ -219,13 +228,43 @@ describe("runAdd", () => {
     );
     expect(code).toBe(EXIT.ok);
     expect(booted).toBe(false);
-    expect(events()).toEqual([{ event: "handoff", owner: "tui" }]);
+    // A script reads `done` as the end of every run, a hand-off included.
+    expect(events()).toEqual([
+      { event: "handoff", owner: "tui" },
+      { event: "done", saved: 0, exists: 0, failed: 0, halted: null, exit: 0 },
+    ]);
     expect(await takeRequest(dir)).toEqual({
       kind: "add",
       links: [SONG, OTHER],
       all: true,
     });
     owner!.release();
+  });
+
+  it("runs the links itself when the owner leaves before reading them", async () => {
+    downloadsSucceed();
+    // An owner in its last moments: alive when the links are handed over,
+    // gone before its next look at the inbox.
+    const owner = await claimInstance("headless", dir);
+    const run = runAdd(
+      { links: [SONG], all: false, json: true },
+      deps({ tickMs: 1_000 }),
+    );
+    await vi.waitFor(async () =>
+      expect(await fs.readdir(path.join(dir, "inbox"))).toHaveLength(1),
+    );
+    owner!.release();
+    expect(await run).toBe(EXIT.ok);
+    expect(events().map((e) => e.event)).toEqual(["link", "track", "done"]);
+    expect(await fs.readdir(path.join(dir, "inbox"))).toEqual([]);
+  });
+
+  it("queues its links ahead of the saved backlog", async () => {
+    downloadsSucceed();
+    const enqueue = vi.spyOn(DownloadQueue.prototype, "enqueue");
+    await runAdd({ links: [SONG], all: false, json: true }, deps());
+    expect(enqueue).toHaveBeenCalledWith(expect.any(Array), { front: true });
+    enqueue.mockRestore();
   });
 
   it("exits 75 with the reason when the platform stops the queue", async () => {
@@ -297,6 +336,7 @@ describe("runAdd", () => {
     );
     expect(code).toBe(EXIT.failed);
     expect(notes.join("\n")).toMatch(/won't start/);
+    expect(events().at(-1)).toMatchObject({ event: "done", exit: 1 });
     expect(await liveOwner(dir)).toBeNull();
   });
 
@@ -348,5 +388,83 @@ describe("runAdd", () => {
       { event: "handoff", owner: "headless" },
     ]);
     expect(events().at(-1)).toMatchObject({ event: "done", saved: 2, exit: 0 });
+  });
+
+  // A tick that never comes: only the look a run takes as it settles can find
+  // a request, which is the moment a real one would be stranded.
+  const noTicks = (): HeadlessDeps => deps({ tickMs: 600_000 });
+
+  it("takes in links handed over after its last tick, before letting go", async () => {
+    downloadsSucceed();
+    await submitRequest({ kind: "add", links: [OTHER], all: false }, dir);
+    const code = await runAdd({ links: [SONG], all: false, json: true }, noTicks());
+    expect(code).toBe(EXIT.ok);
+    expect(events().at(-1)).toMatchObject({ event: "done", saved: 2 });
+    expect(await fs.readdir(path.join(dir, "inbox"))).toEqual([]);
+  });
+
+  it("finishes cleanly when that last look hits a file error", async () => {
+    downloadsSucceed();
+    await submitRequest({ kind: "add", links: [OTHER], all: false }, dir);
+    const rm = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("locked"));
+    const code = await runAdd({ links: [SONG], all: false, json: true }, noTicks());
+    rm.mockRestore();
+    expect(code).toBe(EXIT.ok);
+    // The request stays for its sender to run.
+    expect(await fs.readdir(path.join(dir, "inbox"))).toHaveLength(1);
+  });
+
+  it.each([
+    ["SIGTERM", EXIT.terminated, "terminated"],
+    ["SIGINT", EXIT.interrupted, "interrupted"],
+  ] as const)("saves its place and exits on %s", async (name, exit, halted) => {
+    // The download never finishes, so only the signal can end the run.
+    const run = runAdd({ links: [SONG], all: false, json: true }, deps());
+    await vi.waitFor(() => expect(vi.mocked(downloadTrack)).toHaveBeenCalled());
+    const suspend = vi.spyOn(queue, "suspend");
+    signal(name);
+    expect(await run).toBe(exit);
+    expect(events().at(-1)).toMatchObject({ event: "done", halted, exit });
+    expect(suspend).toHaveBeenCalledWith(true);
+    expect(await liveOwner(dir)).toBeNull();
+  });
+
+  it("stops without writing when another process has taken the library", async () => {
+    const run = runAdd({ links: [SONG], all: false, json: true }, deps());
+    await vi.waitFor(() => expect(vi.mocked(downloadTrack)).toHaveBeenCalled());
+    const suspend = vi.spyOn(queue, "suspend");
+    // After a long freeze this run looked abandoned and was replaced.
+    const claim = path.join(dir, "instance.json");
+    const rival = JSON.stringify({ pid: 2 ** 30, kind: "tui", startedAt: "" });
+    await fs.writeFile(claim, rival);
+    expect(await run).toBe(EXIT.tryLater);
+    expect(events().at(-1)).toMatchObject({ halted: "another soundcli took over" });
+    // The saved queue, the library index and the claim are the new owner's.
+    expect(suspend).toHaveBeenCalledWith(false);
+    expect(flushed).toBe(0);
+    expect(await fs.readFile(claim, "utf8")).toBe(rival);
+  });
+
+  it("exits 75 when a later link clears the halt an earlier one caused", async () => {
+    // The first song is refused. The second is only queued after that, which
+    // resets the queue's halt flag while the first row stays on hold.
+    vi.mocked(downloadTrack).mockImplementation(async (params) =>
+      params.url.endsWith("velvet-signal")
+        ? { status: "ratelimited", reason: "botgate" }
+        : { status: "downloaded", meta: { id: "n", title: "n", filepath: "/n" } },
+    );
+    enumerateMock.mockImplementation(async (url: string) => {
+      const slug = url.split("/").pop()!;
+      if (slug === "night-drive") {
+        await vi.waitFor(() => expect(queue.stats().rateLimited).toBe(true));
+      }
+      return { entries: [{ id: slug, title: slug, url }] };
+    });
+    const code = await runAdd(
+      { links: [SONG, OTHER], all: false, json: true },
+      deps(),
+    );
+    expect(code).toBe(EXIT.tryLater);
+    expect(events().at(-1)).toMatchObject({ saved: 1, halted: "bot gate" });
   });
 });

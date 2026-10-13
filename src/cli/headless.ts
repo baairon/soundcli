@@ -22,11 +22,13 @@ import { reconcileLibrary } from "../library/reconcile";
 import type { Track } from "../library/types";
 import { resolveLink, type LinkTarget } from "../sources/resolve-link";
 import {
+  awaitPickup,
   claimInstance,
   liveOwner,
   ownerInbox,
   submitRequest,
   TICK_MS,
+  type Claim,
   type OwnerKind,
 } from "./instance";
 
@@ -39,8 +41,8 @@ export interface AddCommand {
 /**
  * What the process exits with. 75 is sysexits' EX_TEMPFAIL: nothing is wrong
  * with the request, the platform (or an opening dashboard) stopped the run,
- * the queue is saved, and running the same command later carries on. 130 is
- * the shell's own convention for ctrl-c.
+ * the queue is saved, and running the same command later carries on. 130 and
+ * 143 are the shell's own convention for ctrl-c and a plain kill.
  */
 export const EXIT = {
   ok: 0,
@@ -48,11 +50,24 @@ export const EXIT = {
   usage: 2,
   tryLater: 75,
   interrupted: 130,
+  terminated: 143,
 } as const;
 
 /**
+ * The signals that end a run early with its place saved. SIGHUP is left
+ * alone: a listener would undo `nohup`, which works by having it ignored.
+ */
+const SIGNAL_STOPS = {
+  SIGINT: { halted: "interrupted", exit: EXIT.interrupted },
+  SIGTERM: { halted: "terminated", exit: EXIT.terminated },
+} as const;
+
+export type StopSignal = keyof typeof SIGNAL_STOPS;
+
+/**
  * Everything `--json` prints, one object per line. This is a public contract:
- * fields are only ever added, never renamed or removed.
+ * fields are only ever added, never renamed or removed. `done` is the last
+ * line of every run whose links were accepted.
  */
 export type HeadlessEvent =
   | {
@@ -99,6 +114,8 @@ export interface HeadlessDeps {
   /** Setup chatter and errors, on stderr, so stdout stays parseable. */
   note: (line: string) => void;
   boot: (note: (message: string) => void) => Promise<Engine>;
+  /** Hear the signals that stop a run; returns how to stop listening. */
+  signals: (onSignal: (signal: StopSignal) => void) => () => void;
 }
 
 /** Bring up the engine the way the dashboard does, minus everything it draws. */
@@ -133,6 +150,15 @@ function defaultDeps(): HeadlessDeps {
     out: (line) => process.stdout.write(`${line}\n`),
     note: (line) => process.stderr.write(`${line}\n`),
     boot: bootEngine,
+    signals: (onSignal) => {
+      const signals = Object.keys(SIGNAL_STOPS) as StopSignal[];
+      const heard = signals.map((signal) => {
+        const handler = (): void => onSignal(signal);
+        process.once(signal, handler);
+        return () => process.off(signal, handler);
+      });
+      return () => heard.forEach((off) => off());
+    },
   };
 }
 
@@ -170,11 +196,41 @@ function describe(e: HeadlessEvent): string {
 
 type OkTarget = Extract<LinkTarget, { ok: true }>;
 
+/** Why a run ended before its queue settled. */
+type Stop = "yielded" | "displaced" | StopSignal;
+
+/**
+ * Become the owner, or hand the links to the process that is and return its
+ * kind. An owner can exit between any two of these checks, so a miss is tried
+ * again rather than answered with a hand-off to nobody.
+ */
+async function claimOrHandOff(
+  cmd: AddCommand,
+  deps: HeadlessDeps,
+): Promise<Claim | OwnerKind> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const claim = await claimInstance("headless", deps.dataDir);
+    if (claim) return claim;
+    const owner = await liveOwner(deps.dataDir);
+    if (!owner) continue;
+    const request = await submitRequest(
+      { kind: "add", links: cmd.links, all: cmd.all },
+      deps.dataDir,
+    );
+    // False: the owner left before reading it, so the links are still ours.
+    if (await awaitPickup(request, deps.dataDir, deps.tickMs * 3)) {
+      return owner.kind;
+    }
+  }
+  throw new Error("couldn't tell whether another soundcli is running");
+}
+
 /**
  * Download the links with no dashboard and return the exit code.
  *
  * When soundcli is already running (a dashboard, or another `add`), the links
- * are handed to it and this returns at once: one process owns the library.
+ * are handed to it and this returns once it has them: one process owns the
+ * library.
  */
 export async function runAdd(
   cmd: AddCommand,
@@ -195,23 +251,48 @@ export async function runAdd(
     targets.push({ link, target });
   }
 
-  const claim = await claimInstance("headless", deps.dataDir);
-  if (!claim) {
-    const owner = await liveOwner(deps.dataDir);
-    await submitRequest(
-      { kind: "add", links: cmd.links, all: cmd.all },
-      deps.dataDir,
-    );
-    emit({ event: "handoff", owner: owner?.kind ?? "tui" });
-    return EXIT.ok;
+  const tally = { saved: 0, exists: 0, failed: 0, retryable: 0 };
+  const done = (exit: number, halted: string | null = null): number => {
+    emit({
+      event: "done",
+      saved: tally.saved,
+      exists: tally.exists,
+      failed: tally.failed,
+      halted,
+      exit,
+    });
+    return exit;
+  };
+  const fail = (e: unknown): number => {
+    deps.note(`soundcli: ${e instanceof Error ? e.message : String(e)}`);
+    return done(EXIT.failed);
+  };
+
+  let claim: Claim;
+  try {
+    const held = await claimOrHandOff(cmd, deps);
+    if (typeof held === "string") {
+      emit({ event: "handoff", owner: held });
+      // A script reads `done` as the end of every run. For a person the line
+      // above is the whole story, and "0 saved" under it reads as a failure.
+      return cmd.json ? done(EXIT.ok) : EXIT.ok;
+    }
+    claim = held;
+  } catch (e) {
+    return fail(e);
   }
 
   let engine: Engine | undefined;
-  const tally = { saved: 0, exists: 0, failed: 0, retryable: 0 };
   let linkErrors = 0;
   // Links still being read. The queue cannot see these yet, so "nothing
   // pending" alone would end the run under them.
   let busy = 0;
+  // Looks at the inbox in flight: a request leaves the inbox a moment before
+  // its links reach the queue.
+  let looking = 0;
+  // Why the platform last parked the queue. Queueing another link clears the
+  // queue's own flag while the rows it parked stay parked.
+  let lastHalt = "";
   let recheck: (() => void) | undefined;
 
   const onItem = (item: QueueItem, track?: Track, owned = false): void => {
@@ -247,7 +328,8 @@ export async function runAdd(
   const add = async (link: string, target: OkTarget): Promise<void> => {
     busy++;
     try {
-      const r = await enqueueTarget(engine!.queue, target);
+      // Ahead of the backlog an earlier session left, which can run for hours.
+      const r = await enqueueTarget(engine!.queue, target, { front: true });
       if (r.firstError) linkErrors++;
       tally.exists += r.alreadySaved;
       emit({
@@ -265,8 +347,8 @@ export async function runAdd(
     }
   };
 
-  let stop!: (why: "yielded" | "interrupted") => void;
-  const stopped = new Promise<"yielded" | "interrupted">((resolve) => {
+  let stop!: (why: Stop) => void;
+  const stopped = new Promise<Stop>((resolve) => {
     stop = resolve;
   });
 
@@ -274,58 +356,75 @@ export async function runAdd(
   // fetching tools, and a claim that went stale meanwhile would let a second
   // process start beside this one.
   const inbox = ownerInbox(claim, deps.dataDir);
-  const onTick = async (): Promise<void> => {
-    const request = await inbox(
-      () =>
-        engine !== undefined && busy === 0 && !engine.queue.stats().gathering,
-    );
-    if (!request) return;
-    if (request.kind === "yield") {
-      stop("yielded");
-      return;
-    }
-    // Links from a later `add` join this run rather than waiting for it.
-    for (const link of request.links) {
-      const target = resolveLink(link, { all: request.all });
-      if (target.ok) await add(link, target);
-      else deps.note(`${link}: ${target.reason}`);
+  /** One look at the inbox: the heartbeat, plus at most one request. */
+  const look = async (): Promise<"added" | "stopping" | "empty"> => {
+    looking++;
+    try {
+      const request = await inbox(() => engine !== undefined && busy === 0);
+      if (!request) return "empty";
+      if (request.kind !== "add") {
+        stop(request.kind === "yield" ? "yielded" : "displaced");
+        return "stopping";
+      }
+      // Links from a later `add` join this run rather than waiting for it.
+      for (const link of request.links) {
+        const target = resolveLink(link, { all: request.all });
+        if (target.ok) await add(link, target);
+        else deps.note(`${link}: ${target.reason}`);
+      }
+      return "added";
+    } finally {
+      looking--;
+      recheck?.();
     }
   };
-  const tick = setInterval(() => void onTick().catch(() => {}), deps.tickMs);
-  const onSigint = (): void => stop("interrupted");
-  process.once("SIGINT", onSigint);
+  const tick = setInterval(() => void look().catch(() => {}), deps.tickMs);
+  const unhear = deps.signals(stop);
 
-  const cleanup = (): void => {
+  const cleanup = (save = true): void => {
     clearInterval(tick);
-    process.off("SIGINT", onSigint);
+    unhear();
     // Kills the children and writes the unfinished queue, so the next run (or
-    // the dashboard) picks it up from the .part files.
-    engine?.queue.suspend();
-    engine?.library.flushSync();
+    // the dashboard) picks it up from the .part files. A displaced run writes
+    // nothing: the files are the new owner's now.
+    engine?.queue.suspend(save);
+    if (save) engine?.library.flushSync();
     claim.release();
   };
 
-  const work = async (): Promise<"settled"> => {
+  const work = async (): Promise<"settled" | Stop> => {
     engine = await deps.boot(deps.note);
     const queue = engine.queue;
     queue.on("item", onItem);
+    // Resolves the settle being waited on once nothing is left in motion.
+    let settle: (() => void) | undefined;
+    const watch = (): void => {
+      const s = queue.stats();
+      if (s.rateLimited) lastHalt = s.rateLimitReason;
+      if (!settle || busy > 0 || looking > 0) return;
+      if (s.gathering || s.pending > 0 || s.downloading > 0) return;
+      settle();
+      settle = undefined;
+    };
+    recheck = watch;
+    queue.on("update", watch);
     for (const { link, target } of targets) await add(link, target);
-    await new Promise<void>((resolve) => {
-      const check = (): void => {
-        const s = queue.stats();
-        if (busy > 0 || s.gathering || s.pending > 0 || s.downloading > 0) return;
-        queue.off("update", check);
-        recheck = undefined;
-        resolve();
-      };
-      recheck = check;
-      queue.on("update", check);
-      check();
-    });
-    return "settled";
+    for (;;) {
+      await new Promise<void>((resolve) => {
+        settle = resolve;
+        watch();
+      });
+      // One last look before letting go: links handed over since the previous
+      // tick would otherwise wait in the inbox with nobody left to read them.
+      // A file error here is not the run's failure; the request stays put.
+      const found = await look().catch(() => "empty" as const);
+      if (found === "stopping") return stopped;
+      // A tick that began during that look may still be bringing links in.
+      if (found === "empty" && looking === 0) return "settled";
+    }
   };
 
-  let outcome: "settled" | "yielded" | "interrupted";
+  let outcome: "settled" | Stop;
   try {
     const working = work();
     // Once a stop wins the race nobody is left to hear a late failure.
@@ -333,38 +432,23 @@ export async function runAdd(
     outcome = await Promise.race([working, stopped]);
   } catch (e) {
     cleanup();
-    deps.note(`soundcli: ${e instanceof Error ? e.message : String(e)}`);
-    return EXIT.failed;
+    return fail(e);
   }
 
-  // A platform halt leaves rows on hold; read it before suspend() stops the
-  // queue for our own reasons.
+  // Rows left on hold mean the platform stopped the run; read them before
+  // suspend() stops the queue for our own reasons.
   const s = engine?.queue.stats();
-  const halted =
-    outcome === "yielded"
-      ? "dashboard opened"
-      : outcome === "interrupted"
-        ? "interrupted"
-        : s && s.rateLimited && s.paused > 0
-          ? s.rateLimitReason
-          : null;
-  cleanup();
+  const platformHalt =
+    s && s.paused > 0 ? s.rateLimitReason || lastHalt || "on hold" : null;
+  cleanup(outcome !== "displaced");
 
-  const exit =
-    outcome === "interrupted"
-      ? EXIT.interrupted
-      : halted
-        ? EXIT.tryLater
-        : tally.retryable > 0 || linkErrors > 0
-          ? EXIT.failed
-          : EXIT.ok;
-  emit({
-    event: "done",
-    saved: tally.saved,
-    exists: tally.exists,
-    failed: tally.failed,
-    halted,
-    exit,
-  });
-  return exit;
+  if (outcome === "yielded") return done(EXIT.tryLater, "dashboard opened");
+  if (outcome === "displaced") {
+    return done(EXIT.tryLater, "another soundcli took over");
+  }
+  if (outcome !== "settled") {
+    return done(SIGNAL_STOPS[outcome].exit, SIGNAL_STOPS[outcome].halted);
+  }
+  if (platformHalt) return done(EXIT.tryLater, platformHalt);
+  return done(tally.retryable > 0 || linkErrors > 0 ? EXIT.failed : EXIT.ok);
 }

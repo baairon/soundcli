@@ -10,7 +10,11 @@ vi.mock("../src/ytdlp/ytdlp", () => ({
   enumerate: (...a: unknown[]) => enumerateMock(...a),
 }));
 
-import { claimForDashboard, serveHandoffs } from "../src/cli/handoff";
+import {
+  claimForDashboard,
+  holdForDashboard,
+  serveHandoffs,
+} from "../src/cli/handoff";
 import { EXIT, runAdd } from "../src/cli/headless";
 import { claimInstance, liveOwner, submitRequest } from "../src/cli/instance";
 import { DownloadQueue } from "../src/download/queue";
@@ -61,6 +65,7 @@ describe("claimForDashboard", () => {
           queue: new DownloadQueue(defaultConfig, emptyLib, 1),
           library: emptyLib,
         }),
+        signals: () => () => {},
       },
     );
     await vi.waitFor(async () =>
@@ -107,7 +112,7 @@ describe("serveHandoffs", () => {
     claim!.release();
   });
 
-  it("holds a hand-off while its own lists are still loading", async () => {
+  it("takes a hand-off in while its own lists are still loading", async () => {
     const claim = await claimInstance("tui", dir);
     const queue = new DownloadQueue(defaultConfig, emptyLib, 1);
     const tick = serveHandoffs(claim!, queue, dir);
@@ -115,12 +120,10 @@ describe("serveHandoffs", () => {
 
     const signal = queue.beginGather(); // the user is mid-add in the dashboard
     await tick();
-    expect(queue.getItems()).toEqual([]);
-
-    queue.endGather(signal);
-    await tick();
     expect(queue.getItems()).toHaveLength(1);
+    // The user's listing is still its own session, and a cancel still ends it.
     queue.cancelAll();
+    expect(signal.aborted).toBe(true);
     claim!.release();
   });
 
@@ -140,5 +143,44 @@ describe("serveHandoffs", () => {
     expect(await fs.readdir(path.join(dir, "inbox"))).toEqual([]);
     expect(await liveOwner(dir)).toMatchObject({ kind: "tui" });
     claim!.release();
+  });
+});
+
+describe("holdForDashboard", () => {
+  const claimFile = (): string => path.join(dir, "instance.json");
+
+  it("keeps the claim alive while setup has not produced a queue yet", async () => {
+    const hold = await holdForDashboard(dir);
+    // A first run can spend longer fetching tools than a claim may sit idle.
+    const old = new Date(Date.now() - 60_000);
+    await fs.utimes(claimFile(), old, old);
+    expect(await liveOwner(dir)).toBeNull();
+    await hold.tick();
+    expect(await liveOwner(dir)).toMatchObject({ kind: "tui" });
+    hold.release();
+  });
+
+  it("stands down when displaced, then serves again once it is the owner", async () => {
+    const hold = await holdForDashboard(dir);
+    const queue = new DownloadQueue(defaultConfig, emptyLib, 1);
+    hold.serve(queue);
+    await submitRequest({ kind: "add", links: [SONG], all: false }, dir);
+    // Another live process holds the claim now (same pid, a different start).
+    await fs.writeFile(
+      claimFile(),
+      JSON.stringify({ pid: process.pid, kind: "headless", startedAt: "x" }),
+    );
+    await hold.tick();
+    await hold.tick(); // the other owner is alive: the claim stays its own
+    expect(hold.owns).toBe(false);
+    expect(queue.getItems()).toEqual([]);
+
+    await fs.rm(claimFile());
+    await hold.tick();
+    await hold.tick();
+    expect(hold.owns).toBe(true);
+    expect(queue.getItems()).toHaveLength(1);
+    queue.cancelAll();
+    hold.release();
   });
 });

@@ -47,31 +47,45 @@ function isRunning(pid: number): boolean {
 }
 
 /**
+ * Who the claim names: its live owner, null when nobody holds it, or
+ * "unreadable" for a fresh claim that does not parse. A claim is created empty
+ * and then written, so that one is most likely being made this instant.
+ */
+async function readClaim(dir: string): Promise<Owner | "unreadable" | null> {
+  const file = claimFile(dir);
+  try {
+    if (Date.now() - (await fs.stat(file)).mtimeMs > STALE_MS) return null;
+    const owner = JSON.parse(await fs.readFile(file, "utf8")) as Owner | null;
+    if (typeof owner?.pid !== "number") return "unreadable";
+    return isRunning(owner.pid) ? owner : null;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
+  }
+}
+
+/**
  * The process that currently owns the library, or null. A pid alone is not
  * proof: the OS reuses them, so the claim also has to have been touched
  * recently, which only a live owner's tick does.
  */
 export async function liveOwner(dir: string = paths.data): Promise<Owner | null> {
-  try {
-    const file = claimFile(dir);
-    const [raw, stat] = await Promise.all([
-      fs.readFile(file, "utf8"),
-      fs.stat(file),
-    ]);
-    const owner = JSON.parse(raw) as Owner;
-    if (typeof owner.pid !== "number") return null;
-    if (Date.now() - stat.mtimeMs > STALE_MS) return null;
-    return isRunning(owner.pid) ? owner : null;
-  } catch {
-    return null;
-  }
+  const claim = await readClaim(dir);
+  return claim === "unreadable" ? null : claim;
 }
 
 export interface Claim {
-  /** Prove the owner is still alive; call every TICK_MS. */
-  touch(): Promise<void>;
+  /**
+   * Prove the owner is still alive; call every TICK_MS. False when the claim
+   * now names another process (one that took over after a long freeze), and
+   * the caller has to stop acting as the owner.
+   */
+  touch(): Promise<boolean>;
   /** Give the claim up. Safe to call twice, and from an exit handler. */
   release(): void;
+}
+
+function sameOwner(a: Owner, b: Owner): boolean {
+  return a.pid === b.pid && a.startedAt === b.startedAt;
 }
 
 /**
@@ -82,6 +96,7 @@ export interface Claim {
 export async function claimInstance(
   kind: OwnerKind,
   dir: string = paths.data,
+  settleMs = 50,
 ): Promise<Claim | null> {
   await fs.mkdir(dir, { recursive: true });
   const file = claimFile(dir);
@@ -92,17 +107,39 @@ export async function claimInstance(
   };
 
   let held = false;
+  let tookOver = false;
   for (let attempt = 0; attempt < 2 && !held; attempt++) {
     try {
       await fs.writeFile(file, JSON.stringify(owner), { flag: "wx" });
       held = true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      if (await liveOwner(dir)) return null;
+      // Live, or being written this instant: either way not ours to remove.
+      if (await readClaim(dir)) return null;
       await fs.rm(file, { force: true });
+      tookOver = true;
     }
   }
   if (!held) return null;
+
+  /** Whether the claim file still names this process. */
+  const ours = async (): Promise<boolean> => {
+    try {
+      return sameOwner(JSON.parse(await fs.readFile(file, "utf8")), owner);
+    } catch (e) {
+      // Gone or half-written means taken over. Any other error is a hiccup.
+      const code = (e as NodeJS.ErrnoException).code;
+      return code !== undefined && code !== "ENOENT";
+    }
+  };
+
+  // Two processes can each judge a claim abandoned, and the slower one's
+  // cleanup then deletes the faster one's fresh claim. That lands within
+  // milliseconds, so a moment later the file names whoever really won.
+  if (tookOver) {
+    await new Promise((r) => setTimeout(r, settleMs));
+    if (!(await ours())) return null;
+  }
 
   let released = false;
   const release = (): void => {
@@ -113,7 +150,7 @@ export async function claimInstance(
       // Only our own claim: after a long freeze another process may have
       // judged it stale and taken over.
       const current = JSON.parse(readFileSync(file, "utf8")) as Owner;
-      if (current.pid === process.pid) rmSync(file, { force: true });
+      if (sameOwner(current, owner)) rmSync(file, { force: true });
     } catch {
       // already gone
     }
@@ -122,27 +159,59 @@ export async function claimInstance(
 
   return {
     touch: async () => {
+      if (released || !(await ours())) return false;
       const now = new Date();
       await fs.utimes(file, now, now).catch(() => {});
+      return true;
     },
     release,
   };
 }
 
 /**
- * Leave a request for the owner. Written under a temp name and renamed, so
- * the owner never reads half a file.
+ * Leave a request for the owner and return its file. Written under a temp
+ * name and renamed, so the owner never reads half a file.
  */
 export async function submitRequest(
   request: InboxRequest,
   dir: string = paths.data,
-): Promise<void> {
+): Promise<string> {
   const inbox = inboxDir(dir);
   await fs.mkdir(inbox, { recursive: true });
   const name = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   const tmp = path.join(inbox, `${name}.tmp`);
+  const file = path.join(inbox, `${name}.json`);
   await fs.writeFile(tmp, JSON.stringify(request), "utf8");
-  await fs.rename(tmp, path.join(inbox, `${name}.json`));
+  await fs.rename(tmp, file);
+  return file;
+}
+
+/**
+ * Watch a request until the owner takes it, for up to `timeoutMs`. False when
+ * the owner went away first: the request is withdrawn, so a later owner cannot
+ * run it a second time, and the work is the sender's again.
+ */
+export async function awaitPickup(
+  file: string,
+  dir: string = paths.data,
+  timeoutMs = 3 * TICK_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const waiting = await fs.access(file).then(
+      () => true,
+      () => false,
+    );
+    if (!waiting || Date.now() >= deadline) return true;
+    if (!(await liveOwner(dir))) {
+      // Already gone means someone took it after all.
+      return fs.rm(file).then(
+        () => false,
+        (e: NodeJS.ErrnoException) => e.code === "ENOENT",
+      );
+    }
+    await new Promise((r) => setTimeout(r, Math.min(100, timeoutMs)));
+  }
 }
 
 function parseRequest(raw: string): InboxRequest | null {
@@ -195,19 +264,23 @@ export async function takeRequest(
   return null;
 }
 
+/** A tick's find. "displaced": the claim is no longer this process's. */
+export type InboxTick = InboxRequest | { kind: "displaced" } | null;
+
 /**
  * An owner's side of the inbox, one call per tick: prove liveness, then take
  * at most one request. A yield is always taken; an add only while `canAdd()`
  * says the owner is free to start listing another batch. Ticks never overlap
- * inside the inbox, so two of them can't each take an add.
+ * inside the inbox, so two of them can't each take an add. A displaced owner
+ * takes nothing: the requests are the new owner's to read.
  */
 export function ownerInbox(
   claim: Claim,
   dir: string = paths.data,
-): (canAdd: () => boolean) => Promise<InboxRequest | null> {
+): (canAdd: () => boolean) => Promise<InboxTick> {
   let taking = false;
   return async (canAdd) => {
-    await claim.touch();
+    if (!(await claim.touch())) return { kind: "displaced" };
     if (taking) return null;
     taking = true;
     try {

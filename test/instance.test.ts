@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  awaitPickup,
   claimInstance,
   liveOwner,
   ownerInbox,
@@ -22,6 +23,9 @@ afterEach(async () => {
 });
 
 const claimFile = (): string => path.join(dir, "instance.json");
+
+/** A claim some other process wrote. */
+const rival = JSON.stringify({ pid: 2 ** 30, kind: "headless", startedAt: "" });
 
 describe("claimInstance", () => {
   it("makes this process the live owner until released", async () => {
@@ -89,6 +93,42 @@ describe("claimInstance", () => {
     );
     claim!.release();
     await expect(fs.access(claimFile())).resolves.toBeUndefined();
+  });
+
+  it("reports a claim another process now holds instead of keeping it warm", async () => {
+    const claim = await claimInstance("tui", dir);
+    expect(await claim!.touch()).toBe(true);
+    // After a long freeze another process judged the claim abandoned.
+    await fs.writeFile(claimFile(), rival);
+    expect(await claim!.touch()).toBe(false);
+    claim!.release();
+  });
+
+  it("gives a takeover up when a second process took the same claim over", async () => {
+    // Both judged the old claim abandoned, and the slower one's cleanup
+    // replaced our fresh claim with its own a moment after we wrote it.
+    await fs.writeFile(claimFile(), rival);
+    const taking = claimInstance("tui", dir, 800);
+    await vi.waitFor(async () =>
+      expect(await fs.readFile(claimFile(), "utf8")).toContain("tui"),
+    );
+    await fs.writeFile(claimFile(), rival);
+    expect(await taking).toBeNull();
+    expect(await fs.readFile(claimFile(), "utf8")).toBe(rival);
+  });
+
+  it("leaves a claim that is being written this instant alone", async () => {
+    // Created empty, then written: read in between it names nobody, and
+    // deleting it would knock out an owner that is just starting.
+    await fs.writeFile(claimFile(), "");
+    expect(await claimInstance("headless", dir)).toBeNull();
+    expect(await fs.readFile(claimFile(), "utf8")).toBe("");
+    // Left that way by a crash, it goes stale and is taken over like any other.
+    const old = new Date(Date.now() - 60_000);
+    await fs.utimes(claimFile(), old, old);
+    const claim = await claimInstance("headless", dir);
+    expect(claim).not.toBeNull();
+    claim!.release();
   });
 });
 
@@ -162,6 +202,39 @@ describe("ownerInbox", () => {
 
     expect(await tick(() => true)).toMatchObject({ kind: "add" });
     claim!.release();
+  });
+
+  it("takes nothing once the claim is someone else's", async () => {
+    const claim = await claimInstance("tui", dir);
+    const tick = ownerInbox(claim!, dir);
+    await submitRequest({ kind: "add", links: ["a"], all: false }, dir);
+    await fs.writeFile(claimFile(), rival);
+    expect(await tick(() => true)).toEqual({ kind: "displaced" });
+    // The request is the new owner's to read.
+    expect(await takeRequest(dir)).toMatchObject({ links: ["a"] });
+    claim!.release();
+  });
+});
+
+describe("awaitPickup", () => {
+  const request = (): Promise<string> =>
+    submitRequest({ kind: "add", links: ["a"], all: false }, dir);
+
+  it("returns once the owner takes the request", async () => {
+    const claim = await claimInstance("tui", dir);
+    const file = await request();
+    setTimeout(() => void takeRequest(dir), 30);
+    expect(await awaitPickup(file, dir, 2_000)).toBe(true);
+    claim!.release();
+  });
+
+  it("withdraws the request when the owner goes away first", async () => {
+    const claim = await claimInstance("tui", dir);
+    const file = await request();
+    setTimeout(() => claim!.release(), 30);
+    expect(await awaitPickup(file, dir, 2_000)).toBe(false);
+    // So the next owner cannot run it a second time.
+    expect(await takeRequest(dir)).toBeNull();
   });
 });
 

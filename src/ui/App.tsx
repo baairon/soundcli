@@ -10,8 +10,8 @@ import { loadConfig, saveConfig, type Config } from "../config/config";
 import { promises as fs } from "node:fs";
 import { DownloadQueue } from "../download/queue";
 import { loadQueue } from "../download/persist";
-import { claimForDashboard, serveHandoffs } from "../cli/handoff";
-import { TICK_MS, type Claim } from "../cli/instance";
+import { holdForDashboard, type DashboardHold } from "../cli/handoff";
+import { TICK_MS } from "../cli/instance";
 import { Library as LibraryStore } from "../library/library";
 import { migrateOwnerLayout } from "../library/migrate";
 import { reconcileLibrary } from "../library/reconcile";
@@ -115,9 +115,9 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   const [bootAttempt, setBootAttempt] = useState(0);
   // Guards the bootstrap effect against overlapping runs across retries.
   const booting = useRef(false);
-  // This dashboard's hold on the library and queue (see cli/instance). Null
-  // when another dashboard already has it; that one then runs as before.
-  const claim = useRef<Claim | null>(null);
+  // This dashboard's hold on the library and queue (see cli/handoff). While
+  // another dashboard has the claim this one runs as before and keeps trying.
+  const hold = useRef<DashboardHold | null>(null);
   // Clears the transient "couldn't set up the player" line; cleaned on unmount.
   const mpvStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -183,7 +183,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       // holding them saves its queue and steps aside, and the restore below
       // then carries that queue on in plain sight. Settled before the library
       // loads, so nothing read here goes stale under the other writer.
-      if (!claim.current) claim.current = await claimForDashboard();
+      if (!hold.current) hold.current = await holdForDashboard();
       const library = await LibraryStore.load();
       // One-time layout migration (pre-owner files move into their handle
       // folder) must finish before anything reads the library; the existence
@@ -302,6 +302,8 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
           })
           .catch(() => {});
       }
+      // From here the hold's tick takes in the links `sndcli add` hands over.
+      hold.current.serve(queue);
       setConfigState(cfg);
       setBoot({ library, binaries, queue, playback, history });
       // Silent drift hygiene (drop dead entries + dupes) runs behind the
@@ -354,15 +356,16 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     [boot],
   );
 
-  // While this dashboard owns the library, take in the links `sndcli add`
-  // hands over (see serveHandoffs). The tick is also the claim's heartbeat.
+  // The hold's tick (see holdForDashboard): the claim's heartbeat, and the
+  // inbox for links `sndcli add` hands over. From mount, since a first run can
+  // spend longer fetching tools than a claim may sit untouched.
   useEffect(() => {
-    const held = claim.current;
-    if (!boot || !held) return;
-    const tick = serveHandoffs(held, boot.queue);
-    const timer = setInterval(() => void tick().catch(() => {}), TICK_MS);
+    const timer = setInterval(
+      () => void hold.current?.tick().catch(() => {}),
+      TICK_MS,
+    );
     return () => clearInterval(timer);
-  }, [boot]);
+  }, []);
 
   // Keep the library in step with disk without a restart: re-link files the
   // user moved or reorganized inside the library folder, adopt hand-added
@@ -405,7 +408,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     boot?.queue.suspend();
     boot?.library.flushSync();
     boot?.playback.quit();
-    claim.current?.release();
+    hold.current?.release();
     exit();
   }, [boot, exit]);
 

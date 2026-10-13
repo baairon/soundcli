@@ -1,6 +1,6 @@
 // The dashboard's side of the hand-off (see instance.ts). Kept out of the
 // React tree so it can be tested without a terminal: the component only wires
-// these two calls to its boot and a timer.
+// a hold to its boot and a timer.
 
 import { paths } from "../config/paths";
 import { enqueueTarget } from "../download/gather";
@@ -38,20 +38,21 @@ export async function claimForDashboard(
 /**
  * The dashboard's inbox tick. Links another process handed over join the
  * queue quietly: they show up in Downloads without pulling the user off
- * whatever they were doing. One request at a time, and never while lists are
- * still loading, since the queue tracks a single gather.
+ * whatever they were doing. One request at a time. Resolves false once the
+ * claim is no longer this dashboard's.
  */
 export function serveHandoffs(
   claim: Claim,
   queue: DownloadQueue,
   dir: string = paths.data,
-): () => Promise<void> {
+): () => Promise<boolean> {
   const inbox = ownerInbox(claim, dir);
   let busy = false;
   return async () => {
-    const request = await inbox(() => !busy && !queue.stats().gathering);
+    const request = await inbox(() => !busy);
+    if (request?.kind === "displaced") return false;
     // A yield is meant for a background run; a dashboard keeps its queue.
-    if (request?.kind !== "add") return;
+    if (request?.kind !== "add") return true;
     busy = true;
     try {
       for (const link of request.links) {
@@ -61,5 +62,54 @@ export function serveHandoffs(
     } finally {
       busy = false;
     }
+    return true;
   };
 }
+
+/**
+ * A dashboard's hold on the library from start to quit. `tick` runs every
+ * TICK_MS throughout: the claim's heartbeat while setup is still fetching
+ * tools (a first run can outlast the stale limit), the inbox once `serve` has
+ * a queue, and another try at the claim while someone else has it, so a later
+ * `sndcli add` does not start beside this dashboard.
+ */
+export async function holdForDashboard(
+  dir: string = paths.data,
+  yieldTimeoutMs?: number,
+) {
+  let claim = await claimForDashboard(dir, yieldTimeoutMs);
+  let queue: DownloadQueue | undefined;
+  let handoffs: (() => Promise<boolean>) | undefined;
+  return {
+    get owns(): boolean {
+      return claim !== null;
+    },
+    serve(q: DownloadQueue): void {
+      queue = q;
+      handoffs = undefined;
+    },
+    release(): void {
+      claim?.release();
+      claim = null;
+    },
+    async tick(): Promise<void> {
+      if (!claim) {
+        // No yield is asked for here: a background run is only told to step
+        // aside at boot, when its saved queue can still be restored.
+        claim = await claimInstance("tui", dir);
+        handoffs = undefined;
+        return;
+      }
+      const held = claim;
+      const ours = queue
+        ? await (handoffs ??= serveHandoffs(held, queue, dir))()
+        : await held.touch();
+      if (!ours && claim === held) {
+        held.release();
+        claim = null;
+      }
+    },
+  };
+}
+
+export type DashboardHold = Awaited<ReturnType<typeof holdForDashboard>>;
