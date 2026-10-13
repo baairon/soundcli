@@ -10,7 +10,7 @@ import {
 import { Header } from "../components/Header";
 import { SourceTabs, type SourceFilter } from "../components/SourceTabs";
 import { TextField } from "../components/TextField";
-import { SongList, type SongGroup } from "../components/SongList";
+import { SongList, shuffleRow, type SongGroup } from "../components/SongList";
 import { COLOR, ICON } from "../theme";
 import { cleanText, formatDuration, formatRuntime } from "../../util/format";
 import { fuzzyFilter } from "../../util/fuzzy";
@@ -366,14 +366,8 @@ export function Playlists() {
   );
 
   const shuffleAction = useMemo(
-    () =>
-      shown.length > 1
-        ? {
-            value: "__shuffle__",
-            label: `${ICON.shuffle} Shuffle`,
-          }
-        : undefined,
-    [shown],
+    () => shuffleRow(sq ? "matches" : "all", shown.length),
+    [sq, shown],
   );
 
   const handleSongDelete = useCallback(

@@ -1030,7 +1030,48 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     expect(frame).toContain("Song Title");
     // Expanded drill-down keeps the idle search hint, same as Library.
     expect(frame).toContain("Press / to search…");
-    expect(frame).toContain("Shuffle");
+    expect(frame).toContain("Shuffle all (2)");
+  });
+
+  it("playlists drill-down shuffle names the matches while searching", async () => {
+    const store = makeStore({
+      region: "content",
+      library: makeFakeLibrary(),
+    });
+    const { stdin, lastFrame } = render(wrap(<Playlists />, store));
+    await tick();
+    stdin.write("\r");
+    await tick();
+    stdin.write("/");
+    await tick();
+    stdin.write("song");
+    await tick();
+    expect(lastFrame() ?? "").toContain("Shuffle matches (2)");
+  });
+
+  it("library keeps shuffle during a search and plays only the matches", async () => {
+    let played: string[] = [];
+    const store = makeStore({
+      region: "content",
+      library: makeFakeLibrary(),
+      playTrack: (_t, list) => {
+        played = (list ?? []).map((t) => t.title);
+      },
+    });
+    const { stdin, lastFrame } = render(wrap(<LibrarySection />, store));
+    await tick();
+    stdin.write("/");
+    await tick();
+    stdin.write("another artist");
+    await tick();
+    stdin.write("\r"); // submit the search: the list takes the keys again
+    await tick();
+    expect(lastFrame() ?? "").toContain("Shuffle matches (3)");
+    stdin.write("\r");
+    await tick();
+    expect(played.sort()).toEqual(
+      ["A Longer Song Title", "Closing Song", "Late Night Song"],
+    );
   });
 
   it("playlists drill-down shows runtime and numbered tracks", async () => {

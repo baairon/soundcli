@@ -10,7 +10,8 @@ import {
 import { Header } from "../components/Header";
 import { SourceTabs, type SourceFilter } from "../components/SourceTabs";
 import { TextField } from "../components/TextField";
-import { SongList, type SongGroup } from "../components/SongList";
+import { SongList, shuffleRow, type SongGroup } from "../components/SongList";
+import { shuffledOrder } from "../../player/order";
 import { COLOR, ICON } from "../theme";
 import { cleanText, formatDuration } from "../../util/format";
 import { deleteTracks } from "../../library/delete";
@@ -25,16 +26,6 @@ const SOURCE_ORDER: SourceId[] = [
   "link",
   "local",
 ];
-
-/** Fisher-Yates shuffle (returns a new array). */
-function shuffle<T>(arr: T[]): T[] {
-  const out = [...arr];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j]!, out[i]!];
-  }
-  return out;
-}
 
 /**
  * Every downloaded song in one place: a flat newest-first list with source
@@ -160,18 +151,14 @@ export function Library() {
     return [{ items: visible.map(toItem) }];
   }, [searching, visible, filter, presentSources, inSource, srcOf]);
 
-  // Shuffle action for the browse view only; search results play in order.
+  // Shuffles whatever is listed, so during a search it plays the matches.
   // Memoized so its identity holds across unrelated re-renders.
   const action = useMemo(
     () =>
-      !searching && visible.length > 1
-        ? {
-            value: "__shuffle__",
-            label: `${ICON.shuffle} Shuffle ${
-              filter === "all" ? "all" : SOURCE_LABELS[filter]
-            } (${visible.length})`,
-          }
-        : undefined,
+      shuffleRow(
+        searching ? "matches" : filter === "all" ? "all" : SOURCE_LABELS[filter],
+        visible.length,
+      ),
     [searching, visible, filter],
   );
 
@@ -279,7 +266,7 @@ export function Library() {
   const handleSelect = useCallback(
     (value: string) => {
       if (value === "__shuffle__") {
-        const shuffled = shuffle(visible);
+        const shuffled = shuffledOrder(visible.length, -1).map((i) => visible[i]!);
         if (shuffled.length > 0) playTrack(shuffled[0]!, shuffled);
         return;
       }

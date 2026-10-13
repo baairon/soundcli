@@ -20,6 +20,19 @@ export interface SongGroup {
   items: SongItem[];
 }
 
+/**
+ * The leading shuffle row, worded the same in every list: what it shuffles and
+ * how many. Absent when there is nothing to reorder.
+ */
+export function shuffleRow(
+  scope: string,
+  count: number,
+): { value: string; label: string } | undefined {
+  return count > 1
+    ? { value: "__shuffle__", label: `${ICON.shuffle} Shuffle ${scope} (${count})` }
+    : undefined;
+}
+
 interface SongListProps {
   groups: SongGroup[];
   /** Optional leading action row (e.g. "Shuffle all"), always selectable. */
