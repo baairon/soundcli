@@ -32,7 +32,7 @@ Then it asks where your music comes from. Pick **YouTube**, **SoundCloud**, or *
 
 Every track downloads in its original quality, with album artwork and artist details included, and gets sorted into folders automatically so your collection stays organized. Almost any link works: playlists, albums, artist profiles, your likes, or a single song. Public Spotify playlists and albums work without signing in.
 
-It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. Once a track is saved, it's there for good. You can rename tracks and playlists directly from the interface to keep everything tidy.
+It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. Long YouTube playlists download at a steady pace rather than all at once, because YouTube blocks downloads that come too fast. Once a track is saved, it's there for good. You can rename tracks and playlists directly from the interface to keep everything tidy.
 
 ## Playing it back
 
@@ -41,6 +41,49 @@ Everything runs from the keyboard, with controls that are quick to pick up. Pres
 <p align="center">
   <img src="preview/keys.svg" alt="The keyboard cheatsheet: navigate, player, and download keys" style="max-width: 832px; width: 100%; height: auto;">
 </p>
+
+## Without the dashboard
+
+soundcli can also download without opening anything, which is what you want from a script, a scheduled task, or another program. Give `add` one or more links and it downloads them, prints what happened, and exits:
+
+```sh
+npx sndcli add https://soundcloud.com/artist/track
+```
+
+It is the same downloader the dashboard uses, so everything above still holds: songs land in the same folders, nothing downloads twice, and a run that gets cut off picks up where it left off next time.
+
+A link can be a single song, a playlist, an album, or a SoundCloud likes page. A whole profile is a lot of music to pull in by accident, so `add` only takes one when you add `--all`:
+
+```sh
+npx sndcli add https://soundcloud.com/artist --all
+```
+
+If soundcli is already open, `add` hands the links to it and returns right away, and the songs show up in its Download section. If you open soundcli while an `add` is still running in the background, that run saves its place and steps aside, and the dashboard carries on with the same downloads.
+
+Run the same line on a schedule to keep a playlist or your likes in step. Each run only fetches what is new.
+
+### For scripts
+
+With `--json`, every line of output is one JSON object:
+
+| Event | When | Fields |
+|---|---|---|
+| `link` | A link was read and queued | `link`, `tracks`, `new`, `saved`, plus `error` when it could not be read |
+| `track` | A song finished | `status` (`saved`, `exists` or `failed`), `source`, `title`, `artist`, `file`, plus `reason`, `detail` and `permanent` on a failure |
+| `handoff` | The links went to a soundcli that was already running | `owner` (`tui` for the dashboard, `headless` for another `add`) |
+| `done` | The run is over | `saved`, `exists`, `failed`, `halted`, `exit` |
+
+`halted` is `null` unless the run stopped early, and then it names the reason. Setup messages go to stderr, so stdout carries nothing but these lines.
+
+The exit code says how it ended:
+
+| Code | Meaning |
+|---|---|
+| 0 | Finished, or handed to a running soundcli. Songs that are gone for good (removed, private, copy-protected) are reported but do not fail the run. |
+| 1 | Something failed that another try could fix, a link could not be read, or setup failed. |
+| 2 | The command was wrong: no link, an unknown option, or a profile without `--all`. |
+| 75 | Stopped early with its place saved, because the site started refusing downloads or the dashboard took over. Run it again later. |
+| 130 | Interrupted with Ctrl+C, with its place saved. |
 
 ## Contributing
 

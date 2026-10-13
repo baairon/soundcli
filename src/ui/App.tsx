@@ -10,6 +10,8 @@ import { loadConfig, saveConfig, type Config } from "../config/config";
 import { promises as fs } from "node:fs";
 import { DownloadQueue } from "../download/queue";
 import { loadQueue } from "../download/persist";
+import { claimForDashboard, serveHandoffs } from "../cli/handoff";
+import { TICK_MS, type Claim } from "../cli/instance";
 import { Library as LibraryStore } from "../library/library";
 import { migrateOwnerLayout } from "../library/migrate";
 import { reconcileLibrary } from "../library/reconcile";
@@ -113,6 +115,9 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
   const [bootAttempt, setBootAttempt] = useState(0);
   // Guards the bootstrap effect against overlapping runs across retries.
   const booting = useRef(false);
+  // This dashboard's hold on the library and queue (see cli/instance). Null
+  // when another dashboard already has it; that one then runs as before.
+  const claim = useRef<Claim | null>(null);
   // Clears the transient "couldn't set up the player" line; cleaned on unmount.
   const mpvStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -174,6 +179,11 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       // skip the welcome tour and drop straight into downloading it (the
       // saveConfig below persists the flag).
       if (initialAdd) cfg.firstRunComplete = true;
+      // One process owns the library and queue. A background `sndcli add`
+      // holding them saves its queue and steps aside, and the restore below
+      // then carries that queue on in plain sight. Settled before the library
+      // loads, so nothing read here goes stale under the other writer.
+      if (!claim.current) claim.current = await claimForDashboard();
       const library = await LibraryStore.load();
       // One-time layout migration (pre-owner files move into their handle
       // folder) must finish before anything reads the library; the existence
@@ -344,6 +354,16 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     [boot],
   );
 
+  // While this dashboard owns the library, take in the links `sndcli add`
+  // hands over (see serveHandoffs). The tick is also the claim's heartbeat.
+  useEffect(() => {
+    const held = claim.current;
+    if (!boot || !held) return;
+    const tick = serveHandoffs(held, boot.queue);
+    const timer = setInterval(() => void tick().catch(() => {}), TICK_MS);
+    return () => clearInterval(timer);
+  }, [boot]);
+
   // Keep the library in step with disk without a restart: re-link files the
   // user moved or reorganized inside the library folder, adopt hand-added
   // audio, prune real deletions, and dedupe. Runs when landing on a
@@ -385,6 +405,7 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
     boot?.queue.suspend();
     boot?.library.flushSync();
     boot?.playback.quit();
+    claim.current?.release();
     exit();
   }, [boot, exit]);
 
