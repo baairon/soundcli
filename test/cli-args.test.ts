@@ -36,3 +36,61 @@ describe("parseCliArgs", () => {
     expect(HELP_TEXT).toContain("soundcli <link>");
   });
 });
+
+describe("parseCliArgs add", () => {
+  it("collects every link and defaults both flags off", () => {
+    expect(
+      parseCliArgs([
+        "add",
+        "https://soundcloud.com/lumen/velvet-signal",
+        "https://youtu.be/abc123",
+      ]),
+    ).toEqual({
+      kind: "add",
+      links: [
+        "https://soundcloud.com/lumen/velvet-signal",
+        "https://youtu.be/abc123",
+      ],
+      all: false,
+      json: false,
+    });
+  });
+
+  it("reads the flags wherever they sit", () => {
+    expect(
+      parseCliArgs(["add", "--json", "https://soundcloud.com/lumen", "--all"]),
+    ).toEqual({
+      kind: "add",
+      links: ["https://soundcloud.com/lumen"],
+      all: true,
+      json: true,
+    });
+  });
+
+  it("rejects add with nothing to add", () => {
+    expect(parseCliArgs(["add"])).toEqual({
+      kind: "invalid",
+      arg: "add",
+      inAdd: true,
+    });
+    expect(parseCliArgs(["add", "--json"])).toEqual({
+      kind: "invalid",
+      arg: "add",
+      inAdd: true,
+    });
+  });
+
+  it("rejects a flag add does not know", () => {
+    expect(parseCliArgs(["add", "https://youtu.be/abc123", "--fast"])).toEqual({
+      kind: "invalid",
+      arg: "--fast",
+      inAdd: true,
+    });
+  });
+
+  it("help text documents add", () => {
+    expect(HELP_TEXT).toContain("soundcli add <link>...");
+    expect(HELP_TEXT).toContain("--all");
+    expect(HELP_TEXT).toContain("--json");
+  });
+});

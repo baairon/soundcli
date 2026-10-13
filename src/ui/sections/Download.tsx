@@ -9,9 +9,7 @@ import { GradientBar } from "../components/GradientBar";
 import { detectInput, detectPasteLink, isLinkInput } from "../../sources/detect";
 import { tracksFromUrl } from "../../sources/enqueue-url";
 import { persistableHandle } from "../../sources/persist-handle";
-import { makeYoutube } from "../../sources/youtube";
-import { makeSoundcloud } from "../../sources/soundcloud";
-import { makeSpotify } from "../../sources/spotify/adapter";
+import { adapterFor } from "../../sources/resolve-link";
 import {
   clearPartials,
   getPartials,
@@ -1043,12 +1041,6 @@ export function Download() {
     },
     { isActive: capture !== "none" && !searching },
   );
-
-  function adapterFor(source: SourceId, value: string): SourceAdapter {
-    if (source === "youtube") return makeYoutube(value);
-    if (source === "soundcloud") return makeSoundcloud(value);
-    return makeSpotify(value);
-  }
 
   function savedValue(source: SourceId): string | undefined {
     if (source === "youtube") return config.youtubeHandle;

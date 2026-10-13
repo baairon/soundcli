@@ -749,6 +749,73 @@ describe("download queue YouTube pacing", () => {
   });
 });
 
+describe("download queue item event", () => {
+  afterEach(() => {
+    vi.mocked(downloadTrack).mockReset();
+    vi.mocked(downloadTrack).mockImplementation(() => new Promise(() => {}));
+  });
+
+  it("reports each settled item with its saved track", async () => {
+    vi.mocked(downloadTrack).mockImplementation(async (params) => {
+      if (params.url === "bad") throw new Error("Private video");
+      return {
+        status: "downloaded",
+        meta: { id: params.url, title: "Song", filepath: "/x/song.m4a" },
+      };
+    });
+    const lib = {
+      has: () => false,
+      all: () => [],
+      upsert: vi.fn(async () => {}),
+    } as unknown as Library;
+    const q = new DownloadQueue(defaultConfig, lib, 1);
+    const seen: { status: string; file?: string; owned: boolean }[] = [];
+    q.on("item", (item, track, owned) =>
+      seen.push({ status: item.status, file: track?.filePath, owned }),
+    );
+    q.enqueue([byUrl("good"), byUrl("bad")]);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(seen).toEqual([
+      { status: "done", file: "/x/song.m4a", owned: false },
+      { status: "error", file: undefined, owned: false },
+    ]);
+  });
+
+  it("marks a song the library already held, so it is not counted as new", async () => {
+    // Owned under a bare id title, so it is queued to heal the name: nothing
+    // downloads, and the listener has to be able to tell.
+    const lib = {
+      has: (id: string) => id === "youtube:old",
+      get: (id: string) =>
+        id === "youtube:old"
+          ? { id, source: "youtube", title: "900000001", filePath: "/x/old.m4a" }
+          : undefined,
+      all: () => [],
+      upsert: vi.fn(async () => {}),
+    } as unknown as Library;
+    const q = new DownloadQueue(defaultConfig, lib, 1);
+    const seen: { file?: string; owned: boolean }[] = [];
+    q.on("item", (_item, track, owned) =>
+      seen.push({ file: track?.filePath, owned }),
+    );
+    q.enqueue([byUrl("old")]);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(seen).toEqual([{ file: "/x/old.m4a", owned: true }]);
+    expect(vi.mocked(downloadTrack)).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet for a row parked by a rate limit", async () => {
+    vi.mocked(downloadTrack).mockResolvedValue({ status: "ratelimited" });
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    const seen: string[] = [];
+    q.on("item", (item) => seen.push(item.status));
+    q.enqueue([input("youtube", "a")]);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(q.stats().rateLimited).toBe(true);
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("download queue per-track retry", () => {
   afterEach(() => {
     vi.mocked(downloadTrack).mockReset();

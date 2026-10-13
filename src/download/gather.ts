@@ -1,6 +1,10 @@
-// Turning playlists into queued tracks. Shared by the dashboard's add flows,
-// so a batch is gathered the same way whoever asked for it.
+// Turning playlists and links into queued tracks. Shared by the dashboard's
+// add flows and by `sndcli add`, so a batch is gathered the same way whoever
+// asked for it.
 
+import { SOURCE_LABELS } from "../library/types";
+import { tracksFromUrl } from "../sources/enqueue-url";
+import { adapterFor, type LinkTarget } from "../sources/resolve-link";
 import type { SourceAdapter, SourcePlaylist } from "../sources/types";
 import type { DownloadQueue } from "./queue";
 
@@ -79,4 +83,55 @@ export async function gatherLists(
   }
   result.aborted = signal.aborted;
   return result;
+}
+
+/**
+ * Queue whatever a routed link points at: one song read directly, or the
+ * lists it names gathered through the source's adapter. Never throws; a link
+ * that could not be read comes back with `firstError` and nothing added.
+ */
+export async function enqueueTarget(
+  queue: DownloadQueue,
+  target: Extract<LinkTarget, { ok: true }>,
+): Promise<GatherResult> {
+  try {
+    if (target.kind === "track") {
+      const tracks = await tracksFromUrl(target.source, target.url);
+      if (tracks.length === 0) {
+        return { ...emptyResult(), firstError: "Couldn't read that link." };
+      }
+      const r = queue.enqueue(
+        tracks.map((t) => ({
+          source: target.source,
+          sourceLabel: SOURCE_LABELS[target.source],
+          track: t,
+        })),
+      );
+      return {
+        total: r.total,
+        added: r.added,
+        alreadySaved: r.alreadySaved,
+        newTracks: r.newTracks,
+        aborted: false,
+      };
+    }
+
+    const adapter = adapterFor(target.source, target.input);
+    const lists = await adapter.listPlaylists();
+    const picked =
+      target.pick === "all"
+        ? lists
+        : target.pick === "liked"
+          ? lists.filter((l) => l.kind === "liked")
+          : lists.slice(0, 1);
+    if (picked.length === 0) {
+      return { ...emptyResult(), firstError: "Nothing public to download there." };
+    }
+    return await gatherLists(queue, adapter, picked);
+  } catch (e) {
+    return {
+      ...emptyResult(),
+      firstError: e instanceof Error ? e.message : String(e),
+    };
+  }
 }

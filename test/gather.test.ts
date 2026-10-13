@@ -1,12 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
 // Downloads never run here: the stub leaves rows "downloading" so the tests
 // see exactly what the gather queued.
+const enumerateMock = vi.fn();
 vi.mock("../src/ytdlp/ytdlp", () => ({
   downloadTrack: vi.fn(() => new Promise(() => {})),
+  enumerate: (...a: unknown[]) => enumerateMock(...a),
 }));
 
-import { gatherLists } from "../src/download/gather";
+import { enqueueTarget, gatherLists } from "../src/download/gather";
 import { DownloadQueue } from "../src/download/queue";
 import { defaultConfig } from "../src/config/config";
 import type { Library } from "../src/library/library";
@@ -46,6 +48,10 @@ function adapter(
     },
   };
 }
+
+afterEach(() => {
+  enumerateMock.mockReset();
+});
 
 describe("gatherLists", () => {
   it("queues every list's tracks and reports the totals", async () => {
@@ -101,5 +107,98 @@ describe("gatherLists", () => {
     expect(r.aborted).toBe(true);
     expect(r.added).toBe(0);
     expect(q.getItems()).toEqual([]);
+  });
+});
+
+describe("enqueueTarget", () => {
+  it("reads one song and queues it under its source", async () => {
+    enumerateMock.mockResolvedValue({
+      entries: [
+        {
+          id: "101",
+          title: "Velvet Signal",
+          url: "https://soundcloud.com/lumen/velvet-signal",
+          uploader: "Circuit Fauna",
+        },
+      ],
+    });
+    const q = new DownloadQueue(defaultConfig, emptyLib, 1);
+    const r = await enqueueTarget(q, {
+      ok: true,
+      kind: "track",
+      source: "soundcloud",
+      url: "https://soundcloud.com/lumen/velvet-signal",
+    });
+    expect(r).toMatchObject({ total: 1, added: 1, newTracks: 1 });
+    expect(q.getItems()[0]).toMatchObject({
+      source: "soundcloud",
+      sourceLabel: "SoundCloud",
+      track: { id: "101", title: "Velvet Signal", owner: "lumen" },
+    });
+    q.cancelAll();
+  });
+
+  it("reports a link that reads as empty instead of throwing", async () => {
+    enumerateMock.mockResolvedValue({ entries: [] });
+    const q = new DownloadQueue(defaultConfig, emptyLib, 1);
+    const r = await enqueueTarget(q, {
+      ok: true,
+      kind: "track",
+      source: "link",
+      url: "https://example.com/nothing",
+    });
+    expect(r.added).toBe(0);
+    expect(r.firstError).toMatch(/Couldn't read/);
+  });
+
+  it("reports a link the source refuses instead of throwing", async () => {
+    enumerateMock.mockRejectedValue(new Error("Unsupported URL"));
+    const q = new DownloadQueue(defaultConfig, emptyLib, 1);
+    const r = await enqueueTarget(q, {
+      ok: true,
+      kind: "track",
+      source: "link",
+      url: "https://example.com/nope",
+    });
+    expect(r.firstError).toBe("Unsupported URL");
+  });
+
+  it("takes only the liked list for a likes link", async () => {
+    // The likes feed is listed once and shared by both adapter calls; the
+    // created-sets listing comes back empty.
+    enumerateMock.mockImplementation(async (url: string) =>
+      url.endsWith("/likes")
+        ? {
+            entries: [
+              {
+                id: "1",
+                title: "Velvet Signal",
+                url: "https://soundcloud.com/lumen/velvet-signal",
+              },
+              {
+                id: "2",
+                title: "Night Drive",
+                url: "https://soundcloud.com/lumen/sets/night-drive",
+              },
+            ],
+          }
+        : { entries: [] },
+    );
+    const q = new DownloadQueue(defaultConfig, emptyLib, 1);
+    const r = await enqueueTarget(q, {
+      ok: true,
+      kind: "lists",
+      source: "soundcloud",
+      input: "https://soundcloud.com/lumen/likes",
+      pick: "liked",
+    });
+    // The liked set is its own list, so a likes link leaves it alone.
+    expect(r).toMatchObject({ total: 1, added: 1 });
+    expect(q.getItems()[0]!.track).toMatchObject({
+      id: "1",
+      playlistTitle: "Liked Songs",
+      owner: "lumen",
+    });
+    q.cancelAll();
   });
 });

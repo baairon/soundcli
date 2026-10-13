@@ -5,11 +5,30 @@ export type CliCommand =
   | { kind: "version" }
   | { kind: "help" }
   | { kind: "run"; initialAdd?: string }
-  | { kind: "invalid"; arg: string };
+  /** Download with no dashboard (see cli/headless). */
+  | { kind: "add"; links: string[]; all: boolean; json: boolean }
+  /** `inAdd` marks a mistake inside `add`, which exits 2 like its other usage errors. */
+  | { kind: "invalid"; arg: string; inAdd?: true };
+
+function parseAdd(rest: string[]): CliCommand {
+  const links: string[] = [];
+  let all = false;
+  let json = false;
+  for (const a of rest) {
+    if (a === "--all") all = true;
+    else if (a === "--json") json = true;
+    else if (a.startsWith("-")) return { kind: "invalid", arg: a, inAdd: true };
+    else links.push(a);
+  }
+  // `add` alone has nothing to do.
+  if (links.length === 0) return { kind: "invalid", arg: "add", inAdd: true };
+  return { kind: "add", links, all, json };
+}
 
 export function parseCliArgs(argv: string[]): CliCommand {
   const args = argv.filter((a) => a.trim() !== "");
   if (args.length === 0) return { kind: "run" };
+  if (args[0] === "add") return parseAdd(args.slice(1));
   if (args.length > 1) return { kind: "invalid", arg: args[1]! };
   const a = args[0]!;
   if (a === "--version" || a === "-v") return { kind: "version" };
@@ -24,7 +43,14 @@ export const HELP_TEXT = `soundcli, own your music
 usage
   soundcli                  open the dashboard
   soundcli <link>           download that song on launch
+  soundcli add <link>...    download with no dashboard
   soundcli --version        print the version
+
+add
+  --all                     take every playlist on a profile link
+  --json                    print one JSON object per line
+  exits 0 when done, 75 when stopped early with the queue saved
+  hands the links over when soundcli is already open
 
 tip: quote links that contain & (e.g. "https://...?list=...")
 `;

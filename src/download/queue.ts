@@ -703,10 +703,7 @@ export class DownloadQueue extends EventEmitter {
    * should leave that set complete on disk even when some songs were saved before.
    */
   private async materializeExisting(item: QueueItem): Promise<boolean> {
-    const get = (this.library as Library & { get?: (id: string) => Track | undefined }).get;
-    const existing = typeof get === "function"
-      ? get.call(this.library, libId(item.source, item.track.id, item.track.owner))
-      : undefined;
+    const existing = this.savedTrack(item);
     const folder = this.playlistFolder(item);
     if (!existing || !folder) return false;
     if (this.isInRequestedFolder(existing, item)) {
@@ -1205,6 +1202,20 @@ export class DownloadQueue extends EventEmitter {
     });
   }
 
+  /** The library entry behind an item that was already saved, if any. */
+  private savedTrack(item: QueueItem): Track | undefined {
+    const get = (this.library as Library & { get?: (id: string) => Track | undefined }).get;
+    return typeof get === "function"
+      ? get.call(this.library, libId(item.source, item.track.id, item.track.owner))
+      : undefined;
+  }
+
+  /**
+   * Run one item to a settled state. Emits "item" with the item, its library
+   * entry when it has one, and whether the library already held it (so nothing
+   * was downloaded). Finished rows leave the list at once, so a listener that
+   * wants each outcome (a run with no dashboard) needs the event.
+   */
   private async run(item: QueueItem): Promise<void> {
     // Already in the library (a stale/restored item, or a dup enqueued before
     // its twin finished): skip instantly without touching the network, so a
@@ -1221,6 +1232,7 @@ export class DownloadQueue extends EventEmitter {
         item.error = e instanceof Error ? e.message : String(e);
         this.logFailure(item, item.error);
       }
+      this.emit("item", item, this.savedTrack(item), true);
       this.clearIfFinished(item);
       this.emit("update");
       this.scheduleSave();
@@ -1262,6 +1274,7 @@ export class DownloadQueue extends EventEmitter {
     this.controllers.set(item.id, controller);
     const isSpotify = item.source === "spotify";
     let lastEmit = 0;
+    let saved: Track | undefined;
 
     // Resolve the exact YouTube URL for Spotify tracks lazily, at download time
     // (like spotDL's search_and_download). On no confident match we fall back to
@@ -1394,6 +1407,7 @@ export class DownloadQueue extends EventEmitter {
                 addedAt,
               };
           await this.library.upsert(track);
+          saved = track;
           item.percent = 100;
           item.status = "done";
           this.consecutiveErrors = 0;
@@ -1447,6 +1461,8 @@ export class DownloadQueue extends EventEmitter {
       item.speed = undefined;
       item.eta = undefined;
       item.retrying = false;
+      // A paused row is on hold, not settled; it reports when it finishes.
+      if (item.status !== "paused") this.emit("item", item, saved, false);
       this.clearIfFinished(item);
       this.emit("update");
       this.scheduleSave();

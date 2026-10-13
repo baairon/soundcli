@@ -4,9 +4,7 @@ import { Spinner } from "@inkjs/ui";
 import { useStore } from "../store";
 import { GradientBar } from "../components/GradientBar";
 import { TextField } from "../components/TextField";
-import { makeYoutube } from "../../sources/youtube";
-import { makeSoundcloud } from "../../sources/soundcloud";
-import { makeSpotify } from "../../sources/spotify/adapter";
+import { adapterFor } from "../../sources/resolve-link";
 import { gatherLists } from "../../download/gather";
 import { clearPartials } from "../../sources/partials";
 import { mpvInstallHint } from "../../player/playback";
@@ -58,12 +56,6 @@ const PROMPTS: Record<
     placeholder: "@username or URL",
   },
 };
-
-function adapterFor(source: SourceId, value: string): SourceAdapter {
-  if (source === "youtube") return makeYoutube(value);
-  if (source === "soundcloud") return makeSoundcloud(value);
-  return makeSpotify(value);
-}
 
 export function Welcome() {
   const {
