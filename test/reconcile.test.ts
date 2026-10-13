@@ -7,10 +7,12 @@ import type { Library } from "../src/library/library";
 import type { Track } from "../src/library/types";
 
 function track(over: Partial<Track>): Track {
+  const id = over.id ?? "youtube:x";
   return {
-    id: "youtube:x",
+    id,
     source: "youtube",
-    sourceTrackId: "x",
+    // Each id is its own track unless a test says two entries are one.
+    sourceTrackId: id.slice(id.lastIndexOf(":") + 1),
     title: "Ember",
     artist: "Lumen",
     filePath: "/nope.mp3",
@@ -49,8 +51,8 @@ describe("reconcileLibrary", () => {
     const library = fakeLibrary([
       track({ id: "youtube:a", filePath: kept, addedAt: "2024-01-01T00:00:00Z" }),
       track({
-        id: "soundcloud:b", // same song, added later → loses
-        source: "soundcloud",
+        id: "youtube:legacy", // the same track under an older id → loses
+        sourceTrackId: "a",
         filePath: dup,
         addedAt: "2024-02-01T00:00:00Z",
       }),
@@ -68,6 +70,55 @@ describe("reconcileLibrary", () => {
     // The kept file is intact; the redundant one is deleted.
     await expect(fs.access(kept)).resolves.toBeUndefined();
     await expect(fs.access(dup)).rejects.toThrow();
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("never deletes a different track that shares a name", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-recon-"));
+    const files = ["one.mp3", "two.mp3", "three.mp3"].map((n) =>
+      path.join(dir, n),
+    );
+    for (const f of files) await fs.writeFile(f, "audio");
+
+    // Another upload under the very same name, and the same song from another
+    // source: a name is not an id, so all three stay.
+    const library = fakeLibrary([
+      track({ id: "youtube:a", filePath: files[0] }),
+      track({ id: "youtube:b", filePath: files[1] }),
+      track({ id: "soundcloud:c", source: "soundcloud", filePath: files[2] }),
+    ]);
+    const r = await reconcileLibrary(library);
+
+    expect(r.mergedDuplicates).toBe(0);
+    expect(r.deletedFiles).toBe(0);
+    expect(library.all()).toHaveLength(3);
+    for (const f of files) await expect(fs.access(f)).resolves.toBeUndefined();
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the entry a sync asks for when one track is indexed twice", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-recon-"));
+    const f = path.join(dir, "song.mp3");
+    await fs.writeFile(f, "audio");
+
+    const twin = { source: "soundcloud" as const, owner: "lumen", filePath: f };
+    const library = fakeLibrary([
+      track({ ...twin, id: "soundcloud:1", addedAt: "2024-01-01T00:00:00Z" }),
+      track({
+        ...twin,
+        id: "soundcloud:lumen:1",
+        addedAt: "2024-02-01T00:00:00Z",
+      }),
+    ]);
+    const r = await reconcileLibrary(library);
+
+    // The older entry loses: its id is not the one a sync looks up. The file
+    // they share stays.
+    expect(library.all().map((t) => t.id)).toEqual(["soundcloud:lumen:1"]);
+    expect(r.deletedFiles).toBe(0);
+    await expect(fs.access(f)).resolves.toBeUndefined();
 
     await fs.rm(dir, { recursive: true, force: true });
   });
@@ -239,6 +290,31 @@ describe("reconcileLibrary", () => {
 
     await fs.rm(dir, { recursive: true, force: true });
   });
+
+  it.runIf(process.platform === "win32")(
+    "drops a local shadow whose path differs only by letter case",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-shadow-"));
+      const f = path.join(dir, "Warm Up", "song.mp3");
+      await fs.mkdir(path.dirname(f), { recursive: true });
+      await fs.writeFile(f, "audio");
+
+      // One file on a case-insensitive disk, named two ways.
+      const library = fakeLibrary([
+        track({
+          id: "local:warm up/song.mp3",
+          source: "local",
+          filePath: path.join(dir, "warm up", "song.mp3"),
+        }),
+        track({ id: "youtube:a", filePath: f }),
+      ]);
+      await reconcileLibrary(library, undefined, dir);
+
+      expect(library.all().map((t) => t.id)).toEqual(["youtube:a"]);
+
+      await fs.rm(dir, { recursive: true, force: true });
+    },
+  );
 
   it("never dedupe-deletes hand-added files, even twins", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-twins-"));

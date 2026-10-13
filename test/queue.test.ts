@@ -163,6 +163,63 @@ describe("download queue dedupe", () => {
     expect(r.skipped).toBe(1);
   });
 
+  it("leaves a track alone once its copy is in the requested folder", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-q-"));
+    const owned = path.join(root, "SoundCloud", "owner1");
+    const existing = {
+      id: "soundcloud:owner1:sc1",
+      source: "soundcloud" as SourceId,
+      sourceTrackId: "sc1",
+      title: "Song",
+      artist: "Artist",
+      filePath: path.join(owned, "Liked Songs", "Artist - Song.m4a"),
+      playlist: "Liked Songs",
+      owner: "owner1",
+      addedAt: new Date().toISOString(),
+    };
+    const copyPath = path.join(owned, "Set A", "Artist - Song.m4a");
+    const copy = {
+      ...existing,
+      id: `local:${path.relative(root, copyPath)}`,
+      source: "local" as SourceId,
+      filePath: copyPath,
+      playlist: "Set A",
+      playlistPos: 4,
+    };
+    const byId = new Map<string, object>([
+      [existing.id, existing],
+      [copy.id, copy],
+    ]);
+    const upsertMany = vi.fn(async () => {});
+    const lib = {
+      has: (id: string) => byId.has(id),
+      get: (id: string) => byId.get(id),
+      all: () => [...byId.values()],
+      upsertMany,
+    } as unknown as Library;
+    const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
+    const r = q.enqueue([
+      {
+        source: "soundcloud",
+        sourceLabel: "SoundCloud",
+        track: {
+          id: "sc1",
+          title: "Song",
+          artist: "Artist",
+          downloadUrl: "https://soundcloud.com/artist/song",
+          owner: "owner1",
+          playlistTitle: "Set A",
+          position: 7,
+        },
+      },
+    ]);
+    // A re-sync used to queue it again, copy nothing, and report it saved.
+    expect(r.added).toBe(0);
+    expect(r.alreadySaved).toBe(1);
+    // The copy still follows the feed's order.
+    expect(upsertMany).toHaveBeenCalledWith([{ ...copy, playlistPos: 7 }]);
+  });
+
   it("copies an already-downloaded track into a requested playlist folder", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-q-"));
     const liked = path.join(root, "SoundCloud", "owner1", "Liked Songs");
@@ -1756,4 +1813,77 @@ describe("download queue tool gate", () => {
     expect(q.stats().done).toBe(1);
     expect(ensureCalls).toBe(2);
   });
+});
+
+describe("download queue, the smaller truths", () => {
+  afterEach(() => {
+    vi.mocked(downloadTrack).mockReset();
+    vi.mocked(downloadTrack).mockImplementation(() => new Promise(() => {}));
+    findDownloadedFileMock.mockReset();
+    findDownloadedFileMock.mockImplementation(async (p: string) => p);
+  });
+
+  it("keeps a missing file retryable whatever the song is called", async () => {
+    // "private" in a title is not the platform saying the song is private.
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    vi.mocked(downloadTrack).mockResolvedValueOnce({
+      status: "downloaded",
+      meta: { id: "a", title: "Private Dancer", filepath: "/music/Private Dancer.m4a" },
+    });
+    findDownloadedFileMock.mockResolvedValueOnce(undefined);
+    q.enqueue([input("youtube", "a", "Private Dancer")]);
+    await vi.waitFor(() => expect(q.stats().failed).toBe(1));
+    expect(q.stats().retryable).toBe(1);
+  });
+
+  it("names a Spotify file after Unknown Artist when the artist is empty", async () => {
+    const q = new DownloadQueue(defaultConfig, fakeLib, 1);
+    const song = spotifyInput("s1");
+    song.track.artist = "";
+    q.enqueue([song]);
+    await vi.waitFor(() => expect(vi.mocked(downloadTrack)).toHaveBeenCalled());
+    expect(vi.mocked(downloadTrack).mock.calls.at(-1)![0].fixedStem).toBe(
+      "Unknown Artist - Velvet Signal",
+    );
+  });
+
+  it.runIf(process.platform === "win32")(
+    "sees a playlist renamed only by letter case as the folder it already is",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "soundcli-q-"));
+      const existing = {
+        id: "soundcloud:owner1:sc1",
+        source: "soundcloud" as SourceId,
+        sourceTrackId: "sc1",
+        title: "Song",
+        artist: "Artist",
+        filePath: path.join(root, "SoundCloud", "owner1", "Warm Up", "Artist - Song.m4a"),
+        playlist: "Warm Up",
+        owner: "owner1",
+        addedAt: new Date().toISOString(),
+      };
+      const lib = {
+        has: (id: string) => id === existing.id,
+        get: (id: string) => (id === existing.id ? existing : undefined),
+        all: () => [existing],
+        upsertMany: async () => {},
+      } as unknown as Library;
+      const q = new DownloadQueue({ ...defaultConfig, libraryDir: root }, lib, 1);
+      const r = q.enqueue([
+        {
+          source: "soundcloud",
+          sourceLabel: "SoundCloud",
+          track: {
+            id: "sc1",
+            title: "Song",
+            downloadUrl: "x",
+            owner: "owner1",
+            playlistTitle: "warm up",
+          },
+        },
+      ]);
+      // On disk it is one folder: queueing a "copy" indexed the file twice.
+      expect(r.added).toBe(0);
+    },
+  );
 });

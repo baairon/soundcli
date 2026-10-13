@@ -3,23 +3,29 @@ import path from "node:path";
 import { SOURCE_LABELS, type SourceId, type Track } from "./types";
 import { sanitizeName } from "../ytdlp/args";
 
-/** A set of library entries that are all the same song. */
+/** Library entries that are one track, indexed more than once. */
 export interface DuplicateGroup {
-  signature: string;
+  key: string;
   tracks: Track[];
 }
 
+type Named = Pick<Track, "artist" | "title" | "owner"> & {
+  source?: Track["source"];
+};
+
 /**
- * A normalized "this is the same song in the same collection" key: lowercased
- * artist + title with emoji/symbols stripped, scoped to the (source, owner)
- * collection it belongs to. Within one collection a song never saves twice
- * (likes vs a set of the same handle still dedupe); different handles keep
- * complete, self-contained copies. Ownerless tracks (Spotify, legacy entries)
- * share one global bucket, preserving the old cross-source dedupe for them.
+ * A song's name as a key: lowercased artist + title, spacing and invisible
+ * characters aside, scoped to the (source, owner) collection it belongs to.
+ *
+ * A name is not identity. On a platform people upload to, the track id is the
+ * song: two uploads can share an artist and every letter of a title, differ
+ * only in an emoji or in nothing at all, and still be two songs. So this never
+ * decides what gets deleted, and it never merges two ids from one platform. It
+ * only answers "is this the same song from somewhere else" where no shared id
+ * exists: in the bucket ownerless tracks share (Spotify, pasted links, legacy
+ * entries), which is where one song arrives from two sources.
  */
-export function trackSignature(
-  t: Pick<Track, "artist" | "title" | "owner"> & { source?: Track["source"] },
-): string {
+export function trackSignature(t: Named): string {
   const artist = foldForSignature((t.artist ?? "").toLowerCase());
   const title = foldForSignature((t.title ?? "").toLowerCase());
   const collection = t.owner ? `${t.source ?? ""}:${t.owner.toLowerCase()}` : "";
@@ -27,9 +33,21 @@ export function trackSignature(
 }
 
 /**
- * Emoji/symbol-insensitive folding for dedupe signatures only. Display now
- * renders titles 1:1, but signatures must keep the historical strict strip or
- * previously-merged duplicates ("🔥 Song" vs "Song") stop matching.
+ * The signature of a track that has a name worth matching on: an artist and a
+ * title. A feed that lists titles alone (SoundCloud likes) names no artist,
+ * and a title by itself says nothing: two songs called "Intro" are two songs.
+ */
+export function nameKey(t: Named): string | undefined {
+  const artist = foldForSignature(t.artist ?? "");
+  const title = foldForSignature(t.title ?? "");
+  return artist && title ? trackSignature(t) : undefined;
+}
+
+/**
+ * Drop what cannot be seen, and nothing else: control characters, zero-width
+ * and direction marks, and the selectors that only pick how an emoji is drawn.
+ * Emoji and symbols stay. They used to be stripped, which made every title
+ * that is only an emoji the same empty name.
  */
 function foldForSignature(s: string): string {
   let out = "";
@@ -43,30 +61,46 @@ function foldForSignature(s: string): string {
       (cp >= 0x2028 && cp <= 0x202e) ||
       cp === 0x2060 ||
       cp === 0xfeff ||
-      cp === 0xfe0f ||
-      cp === 0x20e3 ||
-      (cp >= 0x2190 && cp <= 0x21ff) ||
-      (cp >= 0x2300 && cp <= 0x23ff) ||
-      (cp >= 0x2600 && cp <= 0x27bf) ||
-      (cp >= 0x2b00 && cp <= 0x2bff) ||
-      (cp >= 0x1f000 && cp <= 0x1ffff);
+      cp === 0xfe0e ||
+      cp === 0xfe0f;
     if (!junk) out += ch;
   }
   return out.replace(/\s+/g, " ").trim();
 }
 
-/** Group tracks by signature, returning only the groups with 2+ members. */
+/**
+ * Whether two paths name one file. Windows paths are case-insensitive, so two
+ * case-variant strings can point at the same song.
+ */
+export function samePath(a: string, b: string): boolean {
+  return pathKey(a) === pathKey(b);
+}
+
+/** A path as a key that every spelling of the same file shares. */
+export function pathKey(p: string): string {
+  const full = path.resolve(p);
+  return process.platform === "win32" ? full.toLowerCase() : full;
+}
+
+/**
+ * Group entries that are one track indexed twice: the same source, the same
+ * owner's collection and the same platform id (a re-key cut short leaves the
+ * old entry beside the new one). Names take no part: two tracks that share one
+ * are still two tracks.
+ */
 export function findDuplicates(tracks: Track[]): DuplicateGroup[] {
   const groups = new Map<string, Track[]>();
   for (const t of tracks) {
-    const sig = trackSignature(t);
-    const arr = groups.get(sig);
+    // An entry with no platform id can't be shown to be anyone's twin.
+    if (!t.sourceTrackId) continue;
+    const key = `${t.source}|${(t.owner ?? "").toLowerCase()}|${t.sourceTrackId}`;
+    const arr = groups.get(key);
     if (arr) arr.push(t);
-    else groups.set(sig, [t]);
+    else groups.set(key, [t]);
   }
   const out: DuplicateGroup[] = [];
-  for (const [signature, members] of groups) {
-    if (members.length > 1) out.push({ signature, tracks: members });
+  for (const [key, members] of groups) {
+    if (members.length > 1) out.push({ key, tracks: members });
   }
   return out;
 }

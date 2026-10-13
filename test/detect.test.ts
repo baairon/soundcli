@@ -388,3 +388,25 @@ describe("ownerFromTrackUrl", () => {
     ).toBeUndefined();
   });
 });
+
+describe("a profile link copied with a share query", () => {
+  it("is still the profile, not a song", () => {
+    expect(
+      detectInput("https://soundcloud.com/lumen?si=abc123&utm_source=clipboard"),
+    ).toEqual({ ok: true, source: "soundcloud", kind: "profile", value: "lumen" });
+    expect(detectInput("https://www.youtube.com/@Lumen?si=abc")).toMatchObject({
+      ok: true,
+      kind: "profile",
+      value: "Lumen",
+    });
+    expect(detectInput("soundcloud.com/lumen#tracks")).toMatchObject({
+      kind: "profile",
+    });
+  });
+
+  it("leaves a song link a song", () => {
+    expect(
+      detectInput("https://soundcloud.com/lumen/velvet-signal?si=abc"),
+    ).toMatchObject({ ok: true, kind: "track" });
+  });
+});

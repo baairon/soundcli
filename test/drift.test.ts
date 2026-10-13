@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   displaySource,
   findDuplicates,
+  nameKey,
   indexAudioByBasename,
   ownerFolderOf,
   playlistFromPath,
@@ -38,10 +39,18 @@ describe("trackSignature", () => {
     const b = track({ source: "soundcloud" });
     expect(trackSignature(a)).toBe(trackSignature(b));
   });
-  it("strips emoji/symbols so decorated titles still match", () => {
-    expect(trackSignature({ artist: "Lumen", title: "Ember 🔥" })).toBe(
+  it("tells titles apart by their emoji", () => {
+    expect(trackSignature({ artist: "Lumen", title: "Ember 🔥" })).not.toBe(
       trackSignature({ artist: "Lumen", title: "Ember" }),
     );
+    expect(trackSignature({ artist: "Lumen", title: "🕷" })).not.toBe(
+      trackSignature({ artist: "Lumen", title: "🏰" }),
+    );
+  });
+  it("ignores what cannot be seen", () => {
+    expect(
+      trackSignature({ artist: "Lumen", title: "Em​ber 🕷️" }),
+    ).toBe(trackSignature({ artist: "Lumen", title: "Ember 🕷" }));
   });
   it("distinguishes different songs", () => {
     expect(
@@ -50,15 +59,34 @@ describe("trackSignature", () => {
   });
 });
 
+describe("nameKey", () => {
+  it("needs both an artist and a title", () => {
+    expect(nameKey({ title: "Intro" })).toBeUndefined();
+    expect(nameKey({ artist: "Lumen", title: "​" })).toBeUndefined();
+    expect(nameKey({ artist: "Lumen", title: "Intro" })).toBe(
+      trackSignature({ artist: "Lumen", title: "Intro" }),
+    );
+  });
+});
+
 describe("findDuplicates", () => {
-  it("groups two entries of the same song and ignores singletons", () => {
+  it("groups one track indexed under two ids and ignores singletons", () => {
     const dupes = findDuplicates([
-      track({ id: "youtube:a" }),
-      track({ id: "soundcloud:b" }),
-      track({ id: "youtube:c", title: "Different", artist: "Other" }),
+      track({ id: "youtube:lumen:a", sourceTrackId: "a", owner: "lumen" }),
+      track({ id: "youtube:a", sourceTrackId: "a", owner: "lumen" }),
+      track({ id: "youtube:c", sourceTrackId: "c" }),
     ]);
     expect(dupes).toHaveLength(1);
     expect(dupes[0]!.tracks).toHaveLength(2);
+  });
+  it("never groups two tracks that only share a name", () => {
+    expect(
+      findDuplicates([
+        track({ id: "youtube:a", sourceTrackId: "a" }),
+        track({ id: "youtube:b", sourceTrackId: "b" }),
+        track({ id: "soundcloud:c", source: "soundcloud", sourceTrackId: "c" }),
+      ]),
+    ).toEqual([]);
   });
 });
 

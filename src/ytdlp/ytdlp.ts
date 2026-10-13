@@ -89,7 +89,11 @@ function toEntry(e: Record<string, unknown>): YtEntry {
   return {
     id: String(e.id ?? ""),
     title: String(e.title ?? e.id ?? "Untitled"),
-    url: (e.url as string) ?? (e.webpage_url as string) ?? undefined,
+    // A fully resolved item reports the stream of the format yt-dlp picked as
+    // `url` and its page as `webpage_url`; a listed entry carries only `url`,
+    // its own link. The page is the one to download from: the stream is
+    // signed, expires, and knows nothing of the song's name, artist or id.
+    url: (e.webpage_url as string) ?? (e.url as string) ?? undefined,
     uploader:
       (e.uploader as string) ?? (e.uploader_id as string) ?? undefined,
     duration: typeof e.duration === "number" ? e.duration : undefined,
@@ -161,6 +165,8 @@ export interface DownloadParams {
   playlistName?: string;
   /** Normalized handle owning this collection (its folder segment). */
   owner?: string;
+  /** The plain file name is another track's: put the id in this one's. */
+  distinct?: boolean;
   /** Abort the download (kills the yt-dlp child process). */
   signal?: AbortSignal;
 }
@@ -210,7 +216,8 @@ export async function downloadTrack(
   params: DownloadParams,
   onProgress?: (p: DownloadProgress) => void,
 ): Promise<DownloadResult> {
-  const { url, config, sourceLabel, fixedStem, playlistName, owner } = params;
+  const { url, config, sourceLabel, fixedStem, playlistName, owner, distinct } =
+    params;
 
   const outTpl = fixedStem
     ? outputTemplateFixed(
@@ -220,8 +227,14 @@ export async function downloadTrack(
         fixedStem,
       )
     : playlistName
-      ? outputTemplateInFolder(config.libraryDir, sourceLabel, playlistName, owner)
-      : outputTemplate(config.libraryDir, sourceLabel, owner);
+      ? outputTemplateInFolder(
+          config.libraryDir,
+          sourceLabel,
+          playlistName,
+          owner,
+          distinct,
+        )
+      : outputTemplate(config.libraryDir, sourceLabel, owner, distinct);
 
   const progTpl =
     "download:SCPROG\t%(progress.status)s\t%(progress.downloaded_bytes)s\t%(progress.total_bytes)s\t%(progress.total_bytes_estimate)s\t%(progress.speed)s\t%(progress.eta)s";

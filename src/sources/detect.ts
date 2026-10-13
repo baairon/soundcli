@@ -115,7 +115,13 @@ function youtubeRealPlaylistId(raw: string): string | undefined {
 }
 
 function pathSegments(path: string): string[] {
-  return path.replace(/^\//, "").split(/[/?#]/).filter(Boolean);
+  // A share link's query or fragment is not a path segment: a profile copied
+  // with "?si=..." has to read as the profile, not as a song called "si=...".
+  return path
+    .replace(/[?#].*$/, "")
+    .replace(/^\//, "")
+    .split("/")
+    .filter(Boolean);
 }
 
 /**

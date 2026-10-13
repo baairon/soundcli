@@ -99,4 +99,13 @@ describe("adapterFor", () => {
     expect(adapterFor("soundcloud", "lumen").id).toBe("soundcloud");
     expect(adapterFor("spotify", "lumen").id).toBe("spotify");
   });
+
+  it("gives Spotify no owner, since no Spotify track is ever filed under one", () => {
+    // The picker counts what is saved under the adapter's owner, and found
+    // nothing when this named one the tracks never carry.
+    expect(adapterFor("spotify", "lumen").owner).toBeUndefined();
+    expect(
+      adapterFor("spotify", "https://open.spotify.com/user/lumen_fm").owner,
+    ).toBeUndefined();
+  });
 });

@@ -17,7 +17,8 @@ export interface MigrateResult {
 /**
  * One-time, idempotent layout migration: tracks downloaded before collections
  * were handle-scoped get their owner backfilled from the configured handle,
- * and their files moved into <lib>/<Source>/<owner>/<Set>/. Runs at boot only
+ * and their files moved into <lib>/<Source>/<owner>/<Set>/. A track with no
+ * owner that says it came from a pasted link is not one of them. Runs at boot only
  * (before mpv exists, so no file is ever locked by playback) and converges by
  * path comparison: once everything is canonical, every pass is a no-op. A file
  * that can't move (locked, gone, destination taken) keeps its old path and is
@@ -33,8 +34,15 @@ export async function migrateOwnerLayout(
 
   for (const t of library.all()) {
     // Spotify collections are pasted links, not handles: never owner-scoped.
+    // Links are filed by site, and neither handle says anything about them.
     // Hand-added local files aren't ours to relocate at all.
-    if (t.source === "spotify" || t.source === "local") continue;
+    if (t.source === "spotify" || t.source === "link" || t.source === "local") {
+      continue;
+    }
+    // What a pasted playlist or song saved is ownerless on purpose. Adopted
+    // under the configured handle it changed ids, so the next run of the same
+    // link no longer found it and downloaded all of it again.
+    if (!t.owner && t.fromLink) continue;
 
     // Already-owned tracks are post-migration (downloads write the owner and the
     // canonical path), so only legacy ownerless tracks ever need relocating.

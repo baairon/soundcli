@@ -38,7 +38,11 @@ export type SpotifyLink =
 /** Parse a Spotify URL, URI, or bare id into a typed reference. */
 export function parseSpotifyInput(input: string): SpotifyLink {
   const s = input.trim();
-  const m = s.match(/(playlist|album|track|user)[/:]([A-Za-z0-9._-]+)/i);
+  // A playlist link from before 2018 names its owner first
+  // (user/<name>/playlist/<id>), so the thing itself is looked for first.
+  const m =
+    s.match(/(playlist|album|track)[/:]([A-Za-z0-9._-]+)/i) ??
+    s.match(/(user)[/:]([A-Za-z0-9._-]+)/i);
   if (m?.[1] && m[2]) {
     const type = m[1].toLowerCase() as SpotifyLink["type"];
     return { type, id: m[2] } as SpotifyLink;

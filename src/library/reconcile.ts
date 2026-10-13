@@ -8,7 +8,9 @@ import {
   findDuplicates,
   indexAudioByBasename,
   ownerFolderOf,
+  pathKey,
   playlistFromPath,
+  samePath,
   titleFromFilename,
 } from "./drift";
 import { sanitizeName } from "../ytdlp/args";
@@ -29,8 +31,8 @@ export interface ReconcileResult {
 }
 
 /**
- * Silent library hygiene: drop entries whose audio file is gone, collapse
- * duplicate songs down to a single copy (deleting the redundant files),
+ * Silent library hygiene: drop entries whose audio file is gone, collapse a
+ * track indexed twice down to one entry (deleting a redundant second file),
  * adopt audio the user added by hand, and heal owner drift so a folder never
  * splits into look-alike playlists. Mutates the library in place; never
  * touches the network.
@@ -126,25 +128,29 @@ export async function reconcileLibrary(
     }
   }
 
-  // 2) Collapse duplicate songs among the survivors (all still on disk).
-  //    Hand-added files never take part: the app manages what it downloaded,
-  //    but it must never delete a file the user put there themselves.
+  // 2) Collapse a track the index holds twice (all still on disk). Only ids
+  //    say so: two tracks that share a name are still two tracks, and merging
+  //    by name is how a song titled with one emoji kept being deleted for
+  //    another. Hand-added files never take part: the app manages what it
+  //    downloaded, but it must never delete a file the user put there.
   for (const group of findDuplicates(
     library.all().filter((t) => t.source !== "local"),
   )) {
-    const sorted = [...group.tracks].sort((a, b) =>
-      a.addedAt.localeCompare(b.addedAt),
+    // The survivor is the entry a sync asks for by id, then the oldest.
+    const canonical = (t: Track): boolean =>
+      t.id === libId(t.source, t.sourceTrackId, t.owner);
+    const sorted = [...group.tracks].sort(
+      (a, b) =>
+        Number(canonical(b)) - Number(canonical(a)) ||
+        a.addedAt.localeCompare(b.addedAt),
     );
-    const keptPath = sorted[0]!.filePath;
     for (const dup of sorted.slice(1)) {
-      // Don't delete a file the kept copy also points to. Windows paths are
-      // case-insensitive, so two case-variant strings can name that one file;
-      // string equality alone would delete the song both entries share.
-      const sameAsKept =
-        process.platform === "win32"
-          ? dup.filePath.toLowerCase() === keptPath.toLowerCase()
-          : dup.filePath === keptPath;
-      if (dup.filePath && !sameAsKept) {
+      // Never a file some other entry still points to: the survivor usually
+      // shares it, and deleting it would take the song both entries name.
+      const held = library
+        .all()
+        .some((t) => t.id !== dup.id && samePath(t.filePath, dup.filePath));
+      if (dup.filePath && !held) {
         try {
           await fs.rm(dup.filePath, { force: true });
           existsCache?.set(dup.filePath, false);
@@ -165,23 +171,27 @@ export async function reconcileLibrary(
     // A download that lands on a path an adopted track already holds (e.g. the
     // song was imported by hand first) wins: the richer entry keeps the file
     // and the local shadow goes, so the two never coexist.
+    //
+    // Paths are compared the way the file system would: a playlist folder
+    // renamed only by letter case is the same folder on Windows, and reading
+    // it as another one indexed its files twice.
     const downloadPaths = new Set(
       library
         .all()
         .filter((t) => t.source !== "local")
-        .map((t) => t.filePath),
+        .map((t) => pathKey(t.filePath)),
     );
     for (const t of library.all()) {
-      if (t.source === "local" && downloadPaths.has(t.filePath)) {
+      if (t.source === "local" && downloadPaths.has(pathKey(t.filePath))) {
         await library.remove(t.id);
       }
     }
 
-    const claimed = new Set(library.all().map((t) => t.filePath));
+    const claimed = new Set(library.all().map((t) => pathKey(t.filePath)));
     const adoptions: Track[] = [];
     for (const paths of byBasename.values()) {
       for (const p of paths) {
-        if (claimed.has(p)) continue;
+        if (claimed.has(pathKey(p))) continue;
         // The stat doubles as the existence check: the walk predates this
         // run's prune/dedupe deletions, so a listed file may be gone by now.
         let stat;

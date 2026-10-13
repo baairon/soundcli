@@ -127,6 +127,14 @@ describe("parseSpotifyInput", () => {
     });
   });
 
+  it("reads an old playlist link, which names its owner first, as the playlist", () => {
+    expect(
+      parseSpotifyInput(
+        "https://open.spotify.com/user/lumen_fm/playlist/00000000000000000000AA",
+      ),
+    ).toEqual({ type: "playlist", id: "00000000000000000000AA" });
+  });
+
   it("flags junk input", () => {
     expect(parseSpotifyInput("hello there").type).toBe("unknown");
   });

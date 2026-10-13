@@ -88,3 +88,40 @@ describe("enumerate", () => {
     expect(execaMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("enumerate, on a fully resolved song", () => {
+  afterEach(() => {
+    execaMock.mockReset();
+  });
+
+  it("keeps the song's page, not the stream yt-dlp picked for it", async () => {
+    // A single item comes back resolved: `url` is the chosen format's signed
+    // stream and the page is `webpage_url`. Downloading the stream saves a
+    // song named after a CDN file, with no artist and the wrong id.
+    execaMock.mockResolvedValueOnce({
+      stdout: JSON.stringify({
+        id: "240962018",
+        title: "Low Tide",
+        uploader: "Vesper",
+        url: "https://cf-media.example/x0EI1oiZG8LK.128.mp3?Policy=abc",
+        webpage_url: "https://soundcloud.com/vesper/low-tide",
+      }),
+    });
+    const col = await enumerate("https://soundcloud.com/vesper/low-tide", {
+      flat: false,
+    });
+    expect(col.entries[0]!.url).toBe("https://soundcloud.com/vesper/low-tide");
+  });
+
+  it("keeps a listed entry's own link", async () => {
+    execaMock.mockResolvedValueOnce({
+      stdout: JSON.stringify({
+        id: "set1",
+        title: "Night Drive",
+        entries: [{ id: "1", url: "https://soundcloud.com/vesper/low-tide" }],
+      }),
+    });
+    const col = await enumerate("https://soundcloud.com/vesper/sets/night-drive");
+    expect(col.entries[0]!.url).toBe("https://soundcloud.com/vesper/low-tide");
+  });
+});

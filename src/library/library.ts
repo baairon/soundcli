@@ -18,6 +18,8 @@ export class Library {
   private sorted: Track[] | null = null;
   private dirty = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The version (see getVersion) the index file on disk holds. */
+  private savedVersion = 0;
 
   private constructor(index: LibraryIndex) {
     this.index = index;
@@ -144,25 +146,39 @@ export class Library {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    if (!this.dirty) return;
     this.dirty = false;
+    // By version, not by the dirty flag: the timer clears that flag when it
+    // starts a write, and a write still on its way, or one that failed, is
+    // not on disk. Quitting on the flag's word lost the last songs of a run.
+    if (this.savedVersion === this.version) return;
     try {
       mkdirSync(path.dirname(libraryIndexFile), { recursive: true });
-      const tmp = `${libraryIndexFile}.tmp`;
+      // A temp file of its own: the write in flight is using the other one.
+      const tmp = `${libraryIndexFile}.quit.tmp`;
       writeFileSync(tmp, JSON.stringify(this.index), "utf8");
       renameSync(tmp, libraryIndexFile);
+      this.savedVersion = this.version;
     } catch {
       // best effort on exit
     }
   }
 
   private persist(): Promise<void> {
-    this.chain = this.chain.then(async () => {
-      await fs.mkdir(path.dirname(libraryIndexFile), { recursive: true });
-      const tmp = `${libraryIndexFile}.tmp`;
-      await fs.writeFile(tmp, JSON.stringify(this.index), "utf8");
-      await fs.rename(tmp, libraryIndexFile);
-    });
+    this.chain = this.chain
+      .then(async () => {
+        const version = this.version;
+        await fs.mkdir(path.dirname(libraryIndexFile), { recursive: true });
+        const tmp = `${libraryIndexFile}.tmp`;
+        await fs.writeFile(tmp, JSON.stringify(this.index), "utf8");
+        // A newer state may have been written while this one was on its way
+        // (see flushSync): an older one never goes over it.
+        if (version <= this.savedVersion) return;
+        await fs.rename(tmp, libraryIndexFile);
+        this.savedVersion = version;
+      })
+      // One failed write must not end every later one: the next change, or
+      // the quit, writes again.
+      .catch(() => {});
     return this.chain;
   }
 }

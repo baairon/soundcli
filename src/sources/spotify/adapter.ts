@@ -53,13 +53,11 @@ function playlistIdFromUri(uri: string): string {
 export function makeSpotify(input?: string): SourceAdapter {
   const d = input ? detectInput(input) : null;
   let user: string | undefined;
-  let owner: string | undefined;
   let singleInput: string | undefined;
 
   if (d?.ok && d.source === "spotify") {
     if (d.kind === "profile") {
       user = d.value;
-      owner = d.value.toLowerCase();
     } else {
       singleInput = d.value;
     }
@@ -67,19 +65,18 @@ export function makeSpotify(input?: string): SourceAdapter {
     const ref = parseSpotifyInput(input);
     if (ref.type === "user") {
       user = ref.id;
-      owner = ref.id.toLowerCase();
     } else if (isReadable(ref.type)) {
       singleInput = input;
     } else {
       user = normalizeSpotifyHandle(input);
-      owner = user.toLowerCase();
     }
   }
 
+  // No owner: Spotify tracks are filed by playlist alone, and an adapter that
+  // named one made the picker count what is saved under an owner none carry.
   return {
     id: "spotify",
     label: "Spotify",
-    owner,
 
     async listPlaylists(): Promise<SourcePlaylist[]> {
       if (user) {

@@ -3,6 +3,8 @@ import path from "node:path";
 import {
   audioFormatArgs,
   AUDIO_FORMATS,
+  outputTemplate,
+  outputTemplateFixed,
   outputTemplateInFolder,
 } from "../src/ytdlp/args";
 import { AUDIO_EXTS } from "../src/library/drift";
@@ -75,5 +77,22 @@ describe("outputTemplateInFolder", () => {
   it("sanitizes the folder name", () => {
     const p = outputTemplateInFolder(path.join("music"), "SoundCloud", "my/set:name");
     expect(p).toContain(path.join("music", "SoundCloud", "my_set_name"));
+  });
+});
+
+describe("output templates", () => {
+  it("escape a literal percent sign, which yt-dlp would read as a field", () => {
+    const t = outputTemplateInFolder("/m%usic", "SoundCloud", "100% Hits", "50%off");
+    expect(t).toContain("m%%usic");
+    expect(t).toContain("50%%off");
+    expect(t).toContain("100%% Hits");
+    // The fields themselves stay fields.
+    expect(t).toContain(
+      "%(artist,uploader|Unknown Artist)s - %(track,title)s.%(ext)s",
+    );
+    expect(
+      outputTemplateFixed("/music", "Spotify", "Mix", "Vesper - 100% Pure"),
+    ).toContain("Vesper - 100%% Pure.%(ext)s");
+    expect(outputTemplate("/music", "YouTube", "50%off")).toContain("50%%off");
   });
 });

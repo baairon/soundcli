@@ -96,10 +96,10 @@ describe("formatBytes", () => {
   });
 });
 
-describe("trackSignature keeps the strict emoji-insensitive fold", () => {
-  it("dedupes an emoji variant against the plain title", () => {
+describe("trackSignature compares titles exactly", () => {
+  it("keeps an emoji variant apart from the plain title", () => {
     const a = trackSignature({ title: "🔥 Song", artist: "Artist" });
     const b = trackSignature({ title: "Song", artist: "Artist" });
-    expect(a).toBe(b);
+    expect(a).not.toBe(b);
   });
 });

@@ -6,7 +6,7 @@ import { downloadLogFile } from "../config/paths";
 import type { Library } from "../library/library";
 import { libId, type SourceId, type Track } from "../library/types";
 import type { SourceTrack } from "../sources/types";
-import { playlistFromPath, trackSignature } from "../library/drift";
+import { nameKey, playlistFromPath, samePath } from "../library/drift";
 import { findDownloadedFile } from "../util/recover-path";
 import {
   downloadTrack,
@@ -17,7 +17,7 @@ import {
 import { renameTrack } from "../library/rename";
 import type { DownloadProgress } from "../ytdlp/progress";
 import { resolveSpotifyDownloadUrl } from "../sources/spotify/resolve";
-import { sanitizeName } from "../ytdlp/args";
+import { distinctName, sanitizeName } from "../ytdlp/args";
 import {
   restorableItems,
   saveQueue,
@@ -102,6 +102,41 @@ export interface QueueStats {
 }
 
 let counter = 0;
+
+/** Which sources hold a song under each name (see nameKey). */
+type NameHolders = Map<string, Set<SourceId>>;
+
+function noteName(
+  holders: NameHolders,
+  name: string | undefined,
+  source: SourceId,
+): void {
+  if (!name) return;
+  const sources = holders.get(name);
+  if (sources) sources.add(source);
+  else holders.set(name, new Set([source]));
+}
+
+/**
+ * Whether a holder of this name is the same song as a track from `source`.
+ * Another source's copy is, and so is Spotify's own: its catalog ships one
+ * recording under several ids. Anywhere else two ids are two uploads however
+ * alike they are named, and the id alone decides.
+ */
+function holdsSong(
+  holders: NameHolders,
+  name: string | undefined,
+  source: SourceId,
+): boolean {
+  const sources = name ? holders.get(name) : undefined;
+  if (!sources) return false;
+  if (source === "spotify") return true;
+  for (const s of sources) if (s !== source) return true;
+  return false;
+}
+
+/** What a row says when its download finished and left no file to index. */
+const MISSING_ON_DISK = "finished but the file is missing on disk";
 
 /** Fixed number of simultaneous downloads (not user-configurable). */
 const DEFAULT_CONCURRENCY = 3;
@@ -251,6 +286,9 @@ export function isSourceBlockedError(text: string): boolean {
  * describe the host, not the track, so they stay transient.
  */
 export function isPermanentTrackError(text: string): boolean {
+  // Ours, not the platform's, and it ends with a file name that can hold any
+  // word: a song called "Private Dancer" is not a private song.
+  if (text.startsWith(MISSING_ON_DISK)) return false;
   return /(?<!service |temporarily )unavailable|private|removed|does not exist|404|your country|geo.?restrict|drm|confirm your age|age.?restrict|inappropriate for some users/i.test(
     text,
   );
@@ -346,14 +384,14 @@ export class DownloadQueue extends EventEmitter {
    */
   private readonly gathers = new Map<AbortSignal, AbortController>();
   /**
-   * trackSignature of every library entry, for the cross-source "same song"
-   * dedupe. A full library walk per enqueue call is quadratic on a
-   * multi-playlist "download all" (one enqueue per gathered playlist), so the
-   * set is rebuilt only when the library version has moved since the last
-   * build. Per-call additions layer into a separate set, never into this one.
+   * The name of every library entry that has one, for the "same song from
+   * another source" skip. A full library walk per enqueue call is quadratic
+   * on a multi-playlist "download all" (one enqueue per gathered playlist), so
+   * the map is rebuilt only when the library version has moved since the last
+   * build. Per-call additions layer into a separate map, never into this one.
    */
-  private librarySignatures: Set<string> | null = null;
-  private librarySignaturesVersion = -1;
+  private libraryNames: NameHolders | null = null;
+  private libraryNamesVersion = -1;
 
   constructor(
     private config: Config,
@@ -730,7 +768,72 @@ export class DownloadQueue extends EventEmitter {
   private isInRequestedFolder(existing: Track, item: EnqueueInput | QueueItem): boolean {
     const folder = this.playlistFolder(item);
     if (!folder) return true;
-    return resolve(dirname(existing.filePath)) === resolve(folder);
+    // By the file system's own rule: a playlist renamed only by letter case
+    // is still the same folder on Windows.
+    return samePath(dirname(existing.filePath), folder);
+  }
+
+  /**
+   * The copy an earlier pass materialized into the requested folder, while the
+   * library still holds it (under the id materializeExisting mints). It sits
+   * under the song's own file name, or under the one carrying its id when a
+   * different track already had that name there.
+   */
+  private copyInRequestedFolder(
+    existing: Track,
+    item: EnqueueInput | QueueItem,
+  ): Track | undefined {
+    const folder = this.playlistFolder(item);
+    if (!folder) return undefined;
+    const name = basename(existing.filePath);
+    for (const n of [name, distinctName(name, existing.sourceTrackId)]) {
+      const copy = this.library.get(
+        libId("local", relative(this.config.libraryDir, join(folder, n))),
+      );
+      if (copy) return copy;
+    }
+    return undefined;
+  }
+
+  /**
+   * Whether a different track's own entry already holds this file. One track,
+   * one file: a name that is taken is never reused for another song. A file
+   * the user added by hand doesn't count, a download that lands on one adopts
+   * it.
+   */
+  private heldByAnotherTrack(
+    file: string,
+    item: EnqueueInput | QueueItem,
+  ): boolean {
+    return this.library
+      .all()
+      .some(
+        (t) =>
+          t.source !== "local" &&
+          !(t.source === item.source && t.sourceTrackId === item.track.id) &&
+          samePath(t.filePath, file),
+      );
+  }
+
+  /** The file a finished download left on disk, if it can be found. */
+  private async locate(
+    res: DownloadResult,
+    item: QueueItem,
+  ): Promise<string | undefined> {
+    if (res.status !== "downloaded" || !res.meta) return undefined;
+    // Never index a song the player can't open: if the reported file isn't
+    // actually on disk, surface it as a failure instead of a dead row. The
+    // printed path can disagree with disk (a legacy-codepage pipe mangled
+    // the name, or `-x` reported the source container's extension while the
+    // kept file carries the extracted codec's), so resolve the real file
+    // (exact → mangled-name → same-stem/any-audio-ext) before failing.
+    // Yield so stdin/player keys can run before a heavy directory scan.
+    await new Promise<void>((r) => setImmediate(r));
+    const m = res.meta;
+    return findDownloadedFile(m.filepath, {
+      title: m.track ?? m.title ?? item.track.title,
+      artist: m.artist ?? m.uploader ?? item.track.artist,
+    });
   }
 
   /**
@@ -759,7 +862,12 @@ export class DownloadQueue extends EventEmitter {
     }
 
     const source = existing.filePath;
-    const target = join(folder, basename(source));
+    // A different track may own this name here already; the copy then carries
+    // its id instead of passing for that track's file.
+    const plain = join(folder, basename(source));
+    const target = this.heldByAnotherTrack(plain, item)
+      ? join(folder, distinctName(basename(source), existing.sourceTrackId))
+      : plain;
     try {
       await fs.mkdir(folder, { recursive: true });
       await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
@@ -959,29 +1067,31 @@ export class DownloadQueue extends EventEmitter {
   }
 
   /**
-   * Signatures of every library entry, cached until the library changes.
-   * Callers must treat the returned set as read-only: batch-local signatures
-   * belong in their own layer, or the cache would leak this batch's state
-   * into the next.
+   * Names of every library entry, cached until the library changes. Callers
+   * must treat the returned map as read-only: batch-local names belong in
+   * their own layer, or the cache would leak this batch's state into the next.
    */
-  private ownedSignatureSet(): Set<string> {
+  private ownedNames(): NameHolders {
     const getVersion = (this.library as Library & { getVersion?: () => number })
       .getVersion;
     const version =
       typeof getVersion === "function" ? getVersion.call(this.library) : 0;
-    if (!this.librarySignatures || this.librarySignaturesVersion !== version) {
-      const set = new Set<string>();
-      for (const t of this.library.all()) set.add(trackSignature(t));
-      this.librarySignatures = set;
-      this.librarySignaturesVersion = version;
+    if (!this.libraryNames || this.libraryNamesVersion !== version) {
+      const names: NameHolders = new Map();
+      for (const t of this.library.all()) noteName(names, nameKey(t), t.source);
+      this.libraryNames = names;
+      this.libraryNamesVersion = version;
     }
-    return this.librarySignatures;
+    return this.libraryNames;
   }
+
   /**
-   * Add tracks to the queue while de-duping against the library, current
-   * queue, and same-title/artist matches from other sources. The return tells UI
-   * how many were actually added vs skipped as duplicates, while separating
-   * already-saved playlist materialization from genuinely new downloads.
+   * Add tracks to the queue while de-duping against the library and the
+   * current queue. A track is known by its id. A name only stands in where no
+   * id is shared (see holdsSong), so the same song from another source is not
+   * fetched twice. The return tells UI how many were actually added vs skipped
+   * as duplicates, while separating already-saved playlist materialization
+   * from genuinely new downloads.
    *
    * `front` puts the new rows ahead of everything still waiting, for a run with
    * no dashboard whose own links should not sit behind a restored backlog.
@@ -1008,13 +1118,13 @@ export class DownloadQueue extends EventEmitter {
     this.rateLimited = false;
     this.rateLimitReason = "";
     const blocked = new Set<string>();
-    // Signatures of songs we already own or have queued, so the *same song*
-    // never downloads twice even under a different id or from another source.
-    // The library-derived set is cached per library version (a multi-playlist
-    // gather calls enqueue once per playlist); queue items and this call's
-    // own additions layer into the separate per-call set.
-    const ownedSignatures = this.ownedSignatureSet();
-    const signatures = new Set<string>();
+    // Names of songs we already own or have queued, so the same song from
+    // another source is not fetched twice. The library-derived map is cached
+    // per library version (a multi-playlist gather calls enqueue once per
+    // playlist); queue items and this call's own additions layer into the
+    // separate per-call map.
+    const ownedNames = this.ownedNames();
+    const queuedNames: NameHolders = new Map();
     for (const i of this.items) {
       if (
         i.status === "pending" ||
@@ -1023,7 +1133,7 @@ export class DownloadQueue extends EventEmitter {
         i.status === "skipped"
       ) {
         blocked.add(libId(i.source, i.track.id, i.track.owner));
-        signatures.add(trackSignature({ ...i.track, source: i.source }));
+        noteName(queuedNames, nameKey({ ...i.track, source: i.source }), i.source);
       } else if (isDead(i)) {
         // The same track only: the same song from another source may work.
         blocked.add(libId(i.source, i.track.id, i.track.owner));
@@ -1042,15 +1152,23 @@ export class DownloadQueue extends EventEmitter {
     const fresh: QueueItem[] = [];
     for (const inp of inputs) {
       const id = libId(inp.source, inp.track.id, inp.track.owner);
-      const sig = trackSignature({ ...inp.track, source: inp.source });
+      const name = nameKey({ ...inp.track, source: inp.source });
+      const ownedByName = holdsSong(ownedNames, name, inp.source);
       const inLibrary = this.library.has(id);
       const existing = inLibrary ? this.library.get(id) : undefined;
       const dead = this.dead[id];
+      // What this playlist's folder already holds of the song: the entry
+      // itself, or the copy an earlier pass made of one saved elsewhere.
+      // Without the copy, every re-sync queued it again and called it saved.
+      const here = !existing
+        ? undefined
+        : this.isInRequestedFolder(existing, inp)
+          ? existing
+          : this.copyInRequestedFolder(existing, inp);
       if (
         existing &&
         !blocked.has(id) &&
-        (!this.isInRequestedFolder(existing, inp) ||
-          needsTitleHeal(existing.title))
+        (!here || needsTitleHeal(existing.title))
       ) {
         // Already downloaded elsewhere, but this playlist folder is incomplete
         // (queue a local copy operation rather than hiding the track as a
@@ -1059,21 +1177,20 @@ export class DownloadQueue extends EventEmitter {
       } else if (
         inLibrary ||
         blocked.has(id) ||
-        ownedSignatures.has(sig) ||
-        signatures.has(sig)
+        ownedByName ||
+        holdsSong(queuedNames, name, inp.source)
       ) {
-        if (inLibrary || ownedSignatures.has(sig)) alreadySaved++;
+        if (inLibrary || ownedByName) alreadySaved++;
         if (
-          existing &&
+          here &&
           inp.track.playlistTitle &&
           inp.track.position !== undefined &&
-          existing.playlistPos !== inp.track.position &&
-          this.isInRequestedFolder(existing, inp)
+          here.playlistPos !== inp.track.position
         ) {
           // Lives in this folder under a stale (or missing) feed position. A
           // track saved in another folder keeps that playlist's position; its
-          // copy here gets stamped by materialize instead.
-          heals.push({ ...existing, playlistPos: inp.track.position });
+          // copy here is the one restamped.
+          heals.push({ ...here, playlistPos: inp.track.position });
         }
         skipped++;
         continue;
@@ -1096,7 +1213,7 @@ export class DownloadQueue extends EventEmitter {
         newTracks++;
       }
       blocked.add(id);
-      signatures.add(sig);
+      noteName(queuedNames, name, inp.source);
       fresh.push({
         id: `q${++counter}`,
         source: inp.source,
@@ -1389,37 +1506,57 @@ export class DownloadQueue extends EventEmitter {
     }
 
     try {
-      const res = await this.downloadWithRetry(
-        {
-          url,
-          config: this.config,
-          sourceLabel: item.sourceLabel,
-          fixedStem: isSpotify
-            ? `${item.track.artist ?? "Unknown Artist"} - ${item.track.title}`
-            : undefined,
-          playlistName: isSpotify
-            ? (item.track.playlistTitle ?? "Spotify")
-            : item.track.playlistTitle,
-          owner: item.track.owner,
-          signal: controller.signal,
-        },
-        controller.signal,
-        (p) => {
-          item.retrying = false;
-          if (p.percent !== undefined) item.percent = p.percent;
-          if (p.speed !== undefined) item.speed = p.speed;
-          if (p.eta !== undefined) item.eta = p.eta;
-          const now = Date.now();
-          if (now - lastEmit > 250) {
-            lastEmit = now;
+      const fetch = (distinct = false): Promise<DownloadResult> =>
+        this.downloadWithRetry(
+          {
+            url,
+            config: this.config,
+            sourceLabel: item.sourceLabel,
+            fixedStem: isSpotify
+              ? `${item.track.artist || "Unknown Artist"} - ${item.track.title}`
+              : undefined,
+            playlistName: isSpotify
+              ? (item.track.playlistTitle ?? "Spotify")
+              : item.track.playlistTitle,
+            owner: item.track.owner,
+            distinct,
+            signal: controller.signal,
+          },
+          controller.signal,
+          (p) => {
+            item.retrying = false;
+            if (p.percent !== undefined) item.percent = p.percent;
+            if (p.speed !== undefined) item.speed = p.speed;
+            if (p.eta !== undefined) item.eta = p.eta;
+            const now = Date.now();
+            if (now - lastEmit > 250) {
+              lastEmit = now;
+              this.emit("update");
+            }
+          },
+          () => {
+            item.retrying = true;
             this.emit("update");
-          }
-        },
-        () => {
-          item.retrying = true;
-          this.emit("update");
-        },
-      );
+          },
+        );
+      let res = await fetch();
+      let found = await this.locate(res, item);
+      // Spotify names its own files from the catalog, where one name is one
+      // song; everywhere else a name another track holds is not ours to take.
+      if (found && !isSpotify && this.heldByAnotherTrack(found, item)) {
+        if (res.meta && samePath(found, res.meta.filepath)) {
+          // yt-dlp keeps a file that is already there and reports it as this
+          // download, so nothing was fetched. Once more, under a name that
+          // carries the id.
+          res = await fetch(true);
+          found = await this.locate(res, item);
+          if (found && this.heldByAnotherTrack(found, item)) found = undefined;
+        } else {
+          // A loose match that landed on another song's file was never this
+          // track's: fail the row rather than index someone else's audio.
+          found = undefined;
+        }
+      }
 
       if (res.status === "ratelimited") {
         // Don't fail it: keep it (with its .part) and pause the whole queue.
@@ -1438,21 +1575,9 @@ export class DownloadQueue extends EventEmitter {
         item.percent = item.status === "paused" ? item.percent : 0;
       } else if (res.status === "downloaded" && res.meta) {
         const m = res.meta;
-        // Never index a song the player can't open: if the reported file isn't
-        // actually on disk, surface it as a failure instead of a dead row. The
-        // printed path can disagree with disk (a legacy-codepage pipe mangled
-        // the name, or `-x` reported the source container's extension while the
-        // kept file carries the extracted codec's), so resolve the real file
-        // (exact → mangled-name → same-stem/any-audio-ext) before failing.
-        // Yield so stdin/player keys can run before a heavy directory scan.
-        await new Promise<void>((r) => setImmediate(r));
-        const found = await findDownloadedFile(m.filepath, {
-          title: m.track ?? m.title ?? item.track.title,
-          artist: m.artist ?? m.uploader ?? item.track.artist,
-        });
         if (!found) {
           item.status = "error";
-          item.error = `finished but the file is missing on disk (${basename(m.filepath)})`;
+          item.error = `${MISSING_ON_DISK} (${basename(m.filepath)})`;
           this.logFailure(item, `missing on disk; yt-dlp reported: ${m.filepath}`);
         } else {
           m.filepath = found;
@@ -1477,9 +1602,12 @@ export class DownloadQueue extends EventEmitter {
                 spotifyId: item.track.id,
               }
             : {
-                id: libId(item.source, m.id, item.track.owner),
+                // Under the id the feed listed it by, which is the id the
+                // next sync asks for: yt-dlp's own may differ on some sites,
+                // and an entry filed under that one is never found again.
+                id: libId(item.source, item.track.id, item.track.owner),
                 source: item.source,
-                sourceTrackId: m.id,
+                sourceTrackId: item.track.id,
                 // Meta can echo a bare track id (or nothing) for api-v2
                 // stubs; never index that when the enqueued entry knows the
                 // real name. Last resort stays as-is so a finished download
@@ -1496,6 +1624,9 @@ export class DownloadQueue extends EventEmitter {
                 playlist: m.playlist_title ?? item.track.playlistTitle,
                 playlistPos: item.track.position,
                 owner: item.track.owner,
+                // No owner means a pasted link, which the owner migration
+                // must not take for a download from before owners existed.
+                ...(item.track.owner ? {} : { fromLink: true as const }),
                 addedAt,
               };
           await this.library.upsert(track);

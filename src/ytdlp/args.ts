@@ -57,14 +57,37 @@ export function outputTemplate(
   libraryDir: string,
   sourceLabel: string,
   owner?: string,
+  distinct = false,
 ): string {
   return path.join(
-    libraryDir,
-    sourceLabel,
-    ...(owner ? [sanitizeName(owner)] : []),
+    lit(libraryDir),
+    lit(sourceLabel),
+    ...(owner ? [lit(sanitizeName(owner))] : []),
     "%(playlist_title|Singles)s",
-    "%(artist,uploader|Unknown Artist)s - %(track,title)s.%(ext)s",
+    fileTemplate(distinct),
   );
+}
+
+/**
+ * Literal text for an output template, where yt-dlp reads "%" as the start of
+ * a field: a playlist called "100% Hits" would otherwise break the path.
+ */
+function lit(text: string): string {
+  return text.replace(/%/g, "%%");
+}
+
+/**
+ * yt-dlp's own file name. `distinct` adds the track id, for a track whose
+ * plain name another track already holds: one track, one file.
+ */
+function fileTemplate(distinct: boolean): string {
+  return `%(artist,uploader|Unknown Artist)s - %(track,title)s${distinct ? " [%(id)s]" : ""}.%(ext)s`;
+}
+
+/** The same id-carrying name for a file soundcli places itself (a copy). */
+export function distinctName(fileName: string, id: string): string {
+  const ext = path.extname(fileName);
+  return `${fileName.slice(0, fileName.length - ext.length)} [${sanitizeName(id)}]${ext}`;
 }
 
 /** Remove characters that are illegal in filenames across OSes. */
@@ -88,13 +111,14 @@ export function outputTemplateInFolder(
   sourceLabel: string,
   playlist: string,
   owner?: string,
+  distinct = false,
 ): string {
   return path.join(
-    libraryDir,
-    sourceLabel,
-    ...(owner ? [sanitizeName(owner)] : []),
-    sanitizeName(playlist),
-    "%(artist,uploader|Unknown Artist)s - %(track,title)s.%(ext)s",
+    lit(libraryDir),
+    lit(sourceLabel),
+    ...(owner ? [lit(sanitizeName(owner))] : []),
+    lit(sanitizeName(playlist)),
+    fileTemplate(distinct),
   );
 }
 
@@ -109,9 +133,9 @@ export function outputTemplateFixed(
   stem: string,
 ): string {
   return path.join(
-    libraryDir,
-    sourceLabel,
-    sanitizeName(playlist),
-    `${sanitizeName(stem)}.%(ext)s`,
+    lit(libraryDir),
+    lit(sourceLabel),
+    lit(sanitizeName(playlist)),
+    `${lit(sanitizeName(stem))}.%(ext)s`,
   );
 }

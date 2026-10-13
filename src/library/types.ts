@@ -48,9 +48,15 @@ export interface Track {
   playlistPos?: number;
   /**
    * Normalized lowercase handle whose collection this came from (unset for
-   * Spotify and for pre-owner downloads awaiting migration).
+   * Spotify, for what a pasted link saved, and for pre-owner downloads
+   * awaiting migration).
    */
   owner?: string;
+  /**
+   * Saved from a link that names no handle (a pasted playlist or song): it has
+   * no owner on purpose, so the owner migration leaves it where it is.
+   */
+  fromLink?: true;
   /** ISO timestamp of when it entered the library. */
   addedAt: string;
   /** For Spotify-sourced tracks: the original Spotify id we matched from. */
