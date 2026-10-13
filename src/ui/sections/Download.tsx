@@ -30,11 +30,12 @@ import {
   SOURCE_BLOCKING,
   TOO_MANY_FAILURES,
   WAITING_FOR_TOOLS,
+  isPermanentTrackError,
   type QueueItem,
   type QueueStats,
 } from "../../download/queue";
 import { gatherLists } from "../../download/gather";
-import { shortError } from "../../download/reason";
+import { listingError, shortError } from "../../download/reason";
 import { sanitizeName } from "../../ytdlp/args";
 import type { SourceAdapter, SourcePlaylist } from "../../sources/types";
 import { SOURCE_LABELS, type SourceId } from "../../library/types";
@@ -53,7 +54,11 @@ type Step =
   | { name: "queue" }
   | { name: "empty"; label: string; source: SourceId }
   | { name: "info"; message: string }
-  | { name: "error"; message: string; source?: SourceId };
+  /** `again` reruns what failed, when it was a listing and not the input. */
+  | { name: "error"; message: string; source?: SourceId; again?: () => void };
+
+const errorText = (e: unknown): string =>
+  e instanceof Error ? e.message : String(e);
 
 const SOURCES: {
   id: SourceId;
@@ -239,10 +244,12 @@ function QueueRow({ item, detail }: { item: QueueItem; detail: string }) {
   // The header's failed count (and f Retry, when any could work) carry the
   // call to action.
   const quiet = item.status === "error";
+  // Rose is for a failure a retry can fix. A dead track just goes dim.
+  const rose = quiet && !isPermanentTrackError(item.error ?? "");
   return (
     <Box>
       <Text
-        color={MARK_COLOR[item.status]}
+        color={quiet && !rose ? undefined : MARK_COLOR[item.status]}
         dimColor={quiet || !MARK_COLOR[item.status]}
       >
         {`${MARK[item.status] ?? ICON.pending} `}
@@ -253,7 +260,7 @@ function QueueRow({ item, detail }: { item: QueueItem; detail: string }) {
         </Text>
       </Box>
       <Box flexShrink={0} marginLeft={2}>
-        <Text color={quiet ? COLOR.bad : undefined} dimColor={!active}>
+        <Text color={rose ? COLOR.bad : undefined} dimColor={!active}>
           {detail}
         </Text>
       </Box>
@@ -304,15 +311,19 @@ function QueueView({ receipt = false }: { receipt?: boolean }) {
   const { queue, region, listRows } = useStore();
   const items = useQueueItems(queue);
   const s = queue.stats();
+  // Failures that are the track's own fault (removed, private, copy-protected).
+  // They get a dim count of their own, and only F tries them again.
+  const unavailable = s.failed - s.retryable;
   const focused = region === "content";
   const [offset, setOffset] = useState(0);
 
   // Sorting thousands of rows is the queue's hot path: items' identity only
   // changes when useQueueItems publishes (at most every 200 ms), so key the
-  // sort on it instead of re-running on every render in between.
+  // sort on it instead of re-running on every render in between. A row left
+  // alone from memory is old news and stays off the list; the count covers it.
   const sortedItems = useMemo(
     () =>
-      [...items].sort(
+      items.filter((i) => !i.remembered).sort(
         (a, b) =>
           STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
           // Failures cluster by reason so each run can state it once.
@@ -365,6 +376,8 @@ function QueueView({ receipt = false }: { receipt?: boolean }) {
     (input, key) => {
       if (input === "f") {
         if (s.retryable > 0) queue.retryFailed();
+      } else if (input === "F") {
+        if (unavailable > 0) queue.retryFailed(true);
       } else if (receipt) {
         // Every other key belongs to the picker below.
       } else if (input === "[") {
@@ -407,20 +420,22 @@ function QueueView({ receipt = false }: { receipt?: boolean }) {
       ? "Paused"
       : s.canceled
         ? "Stopped"
-        : s.failed
+        : s.retryable
           ? "Done"
           : "All done";
   const saved = s.done + s.skipped;
+  // Out of the tracks that could be saved: an unavailable one never could.
+  const savable = s.total - unavailable;
   // One segment per number that says something. A zero-valued chunk is noise,
   // and the raw input total only ever differed from `total` by in-batch
   // duplicates it never explained on screen. The saved count always leads, so
   // the outcome is stated instead of left as arithmetic for the reader.
-  const counts: { text: string; color?: string; dim: boolean }[] = [
-    {
-      text: `${saved.toLocaleString()} of ${s.total.toLocaleString()} saved`,
+  const counts: { text: string; color?: string; dim: boolean }[] = [];
+  if (savable > 0)
+    counts.push({
+      text: `${saved.toLocaleString()} of ${savable.toLocaleString()} saved`,
       dim: true,
-    },
-  ];
+    });
   if (s.alreadySaved > 0)
     counts.push({
       text: `${s.alreadySaved.toLocaleString()} already saved`,
@@ -432,10 +447,15 @@ function QueueView({ receipt = false }: { receipt?: boolean }) {
       color: COLOR.warn,
       dim: false,
     });
-  if (s.failed > 0)
+  if (s.retryable > 0)
     counts.push({
-      text: `${s.failed.toLocaleString()} failed`,
+      text: `${s.retryable.toLocaleString()} failed`,
       color: COLOR.bad,
+      dim: true,
+    });
+  if (unavailable > 0)
+    counts.push({
+      text: `${unavailable.toLocaleString()} unavailable`,
       dim: true,
     });
   if (s.canceled > 0)
@@ -448,8 +468,10 @@ function QueueView({ receipt = false }: { receipt?: boolean }) {
   if (s.downloading + s.pending > 0) cmds.push({ key: "[", label: "Pause" });
   if (s.paused > 0) cmds.push({ key: "]", label: "Resume" });
   // Only failures a retry could fix: a DRM or removed track fails the same
-  // way every time this session.
+  // way every time this session. F takes those too, for when something
+  // outside has changed.
   if (s.retryable > 0) cmds.push({ key: "f", label: "Retry" });
+  if (unavailable > 0) cmds.push({ key: "F", label: "Retry all" });
   if (isLive(s)) cmds.push({ key: "c", label: "Cancel" });
 
   return (
@@ -1063,8 +1085,9 @@ export function Download() {
     } catch (e) {
       setStep({
         name: "error",
-        message: e instanceof Error ? e.message : String(e),
+        message: listingError(errorText(e), adapter.label),
         source: adapter.id,
+        again: () => void loadLists(adapter, handle),
       });
     }
   }
@@ -1101,10 +1124,12 @@ export function Download() {
               : "Nothing new to download.",
         });
     } catch (e) {
+      const site = source === "link" ? "That site" : SOURCE_LABELS[source];
       setStep({
         name: "error",
-        message: e instanceof Error ? e.message : String(e),
+        message: listingError(errorText(e), site),
         source,
+        again: () => void enqueuePaste(source, url),
       });
     }
   }
@@ -1215,15 +1240,22 @@ export function Download() {
       // failed to enumerate.
       setStep(
         r.firstError && r.added === 0
-          ? { name: "error", message: r.firstError, source: adapter.id }
+          ? {
+              name: "error",
+              message: listingError(r.firstError, adapter.label),
+              source: adapter.id,
+              again: () => void onSubmitLists(adapter, lists, selectedIds),
+            }
           : { name: "info", message: "Nothing new to download." },
       );
     }
   }
 
   /** Options that turn a dead-end (empty/error) into something actionable. */
-  function retryOptions(source?: SourceId) {
+  function retryOptions(source?: SourceId, again = false) {
     const opts: { label: string; value: string }[] = [];
+    // First, because a failed listing is most often the site having a moment.
+    if (again) opts.push({ label: "Try again", value: "again" });
     if (source)
       opts.push({
         label: "Try a different handle",
@@ -1234,7 +1266,8 @@ export function Download() {
   }
 
   function onRetry(value: string, source?: SourceId): void {
-    if (value === "handle" && source)
+    if (value === "again" && step.name === "error") step.again?.();
+    else if (value === "handle" && source)
       setStep({ name: "need-handle", source });
     else setStep({ name: "pick-source" });
   }
@@ -1384,7 +1417,7 @@ export function Download() {
         <Box marginTop={1}>
           <Select
             isDisabled={!focused}
-            options={retryOptions(step.source)}
+            options={retryOptions(step.source, Boolean(step.again))}
             onChange={(v) => onRetry(v, step.source)}
           />
         </Box>
@@ -1416,7 +1449,7 @@ export function Download() {
       <FooterHint>
         {`↑↓ Move  ${ICON.dot}  ↵ Choose${
           hasItems && s.retryable > 0 ? `  ${ICON.dot}  f Retry` : ""
-        }`}
+        }${hasItems && s.failed > s.retryable ? `  ${ICON.dot}  F Retry all` : ""}`}
       </FooterHint>
     </Box>
   );

@@ -38,16 +38,16 @@
     <text x="166.4" y="238" textLength="105.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Open / play</text>
     <text x="300.8" y="238" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">, .</text>
     <text x="368" y="238" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Seek 5s</text>
-    <text x="502.4" y="238" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">↵</text>
-    <text x="569.6" y="238" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Dismiss done</text>
+    <text x="502.4" y="238" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">f</text>
+    <text x="569.6" y="238" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Retry failed</text>
     <rect x="756.1" y="222" width="1.4" height="22" fill="#ae664f"/>
     <rect x="45.7" y="244" width="1.4" height="22" fill="#ae664f"/>
     <text x="60.8" y="260" textLength="28.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">1-5</text>
     <text x="166.4" y="260" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Jump section</text>
     <text x="300.8" y="260" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">0</text>
     <text x="368" y="260" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Restart song</text>
-    <text x="502.4" y="260" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">f</text>
-    <text x="569.6" y="260" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Retry failed</text>
+    <text x="502.4" y="260" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">F</text>
+    <text x="569.6" y="260" textLength="86.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Retry all</text>
     <rect x="756.1" y="244" width="1.4" height="22" fill="#ae664f"/>
     <rect x="45.7" y="266" width="1.4" height="22" fill="#ae664f"/>
     <text x="60.8" y="282" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">/</text>

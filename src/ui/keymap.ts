@@ -66,6 +66,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       { keys: "[ ]", label: "Pause / resume all" },
       { keys: "c", label: "Cancel all" },
       { keys: "f", label: "Retry failed" },
+      { keys: "F", label: "Retry all" },
       { keys: "space", label: "Pick: toggle row" },
     ],
   },

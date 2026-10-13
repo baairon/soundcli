@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render } from "ink-testing-library";
+import * as ytdlp from "../src/ytdlp/ytdlp";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -851,16 +852,20 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     const store = makeStore({ queue: asQueue(new FakeQueue(items)) });
     const { lastFrame } = render(wrap(<Download />, store));
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("0 of 107 saved");
-    expect(frame).toContain("7 failed");
+    // Dead tracks are out of reach, so they sit outside "of N" and are not
+    // called failed.
+    expect(frame).toContain("0 of 100 saved");
+    expect(frame).toContain("7 unavailable");
     expect(frame).toContain("100 canceled");
     // No zero-valued chunk, and no "some failed" on a batch where all of them did.
     expect(frame).not.toContain("already saved");
     expect(frame).not.toContain("some failed");
     // A canceled batch says it stopped rather than "Done".
     expect(frame).toContain("Stopped");
-    // Every failure here is a dead track, so there's nothing to retry.
-    expect(frame).not.toContain("Retry");
+    // Every failure here is a dead track, so plain retry has no job; only the
+    // deliberate one is offered.
+    expect(frame).not.toContain("f Retry");
+    expect(frame).toContain("F Retry all");
   });
 
   it("shows the halt only while it still has rows parked", () => {
@@ -893,7 +898,7 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     expect(frame).not.toContain("] resumes");
   });
 
-  it("states a run of one reason once and offers no retry for dead tracks", () => {
+  it("states a run of one reason once and keeps plain retry off dead tracks", () => {
     const items: QueueItem[] = [
       errorItem("d1", "Track A", drm),
       errorItem("d2", "Track B", drm),
@@ -902,7 +907,20 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     const frame = frameOf(makeStore({ queue: asQueue(new FakeQueue(items)) }));
     expect(frame.split("DRM protected").length - 1).toBe(1);
     expect(frame).toContain("Track C");
-    expect(frame).not.toContain("Retry");
+    expect(frame).not.toContain("f Retry");
+  });
+
+  it("counts a track left alone from memory without listing it again", () => {
+    const items: QueueItem[] = [
+      { ...errorItem("d1", "Old News", drm), remembered: true },
+      errorItem("d2", "Fresh Miss", drm),
+    ];
+    const frame = frameOf(makeStore({ queue: asQueue(new FakeQueue(items)) }));
+    expect(frame).toContain("All done");
+    expect(frame).toContain("2 unavailable");
+    expect(frame).toContain("Fresh Miss");
+    expect(frame).not.toContain("Old News");
+    expect(frame).toContain("F Retry all");
   });
 
   it("keeps a row's detail beside its title on a wide pane", () => {
@@ -940,7 +958,7 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     const settled = frameOf(
       makeStore({ queue: asQueue(new FakeQueue([errorItem("d1", "Track A", drm)])) }),
     );
-    expect(settled).toContain("1 failed");
+    expect(settled).toContain("1 unavailable");
     expect(settled).toContain("Track A");
     expect(settled).toContain("Your public playlists");
     expect(settled).not.toContain("↵ Done");
@@ -1232,6 +1250,30 @@ describe("queue copy, banner, overlay, welcome paste", () => {
     }
     expect(cleared).toBe(true);
     expect(lastFrame() ?? "").toContain("Ready to download");
+  });
+
+  it("meets a failed listing with a calm line and Try again on top", async () => {
+    const spy = vi
+      .spyOn(ytdlp, "enumerate")
+      .mockRejectedValue(new Error("HTTP Error 404: Not Found (caused by X)"));
+    const store = makeStore({
+      region: "content",
+      section: "download",
+      pendingAdd: "https://soundcloud.com/lumen/velvet-signal",
+      setPendingAdd: () => {},
+    });
+    const { lastFrame, unmount } = render(wrap(<Download />, store));
+    for (let i = 0; i < 8 && !(lastFrame() ?? "").includes("Try again"); i++) {
+      await tick();
+    }
+    const frame = lastFrame() ?? "";
+    unmount();
+    spy.mockRestore();
+    expect(frame).toContain("Couldn't find that on SoundCloud");
+    expect(frame).not.toContain("HTTP Error");
+    expect(frame.indexOf("Try again")).toBeLessThan(
+      frame.indexOf("Try a different handle"),
+    );
   });
 
   it("welcome pastes straight into the download flow", async () => {

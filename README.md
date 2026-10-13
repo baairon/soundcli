@@ -32,7 +32,7 @@ Then it asks where your music comes from. Pick **YouTube**, **SoundCloud**, or *
 
 Every track downloads in its original quality, with album artwork and artist details included, and gets sorted into folders automatically so your collection stays organized. Almost any link works: playlists, albums, artist profiles, your likes, or a single song. Public Spotify playlists and albums work without signing in.
 
-It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. Long YouTube playlists download at a steady pace rather than all at once, because YouTube blocks downloads that come too fast. Once a track is saved, it's there for good. You can rename tracks and playlists directly from the interface to keep everything tidy.
+It never downloads the same song twice, and if you close it mid-download, it picks up where it left off next time. A song that can't be downloaded (removed, private, copy-protected) is remembered and left alone instead of failing again on every run. Press `F` in Downloads to try those again. Long YouTube playlists download at a steady pace rather than all at once, because YouTube blocks downloads that come too fast. Once a track is saved, it's there for good. You can rename tracks and playlists directly from the interface to keep everything tidy.
 
 ## Playing it back
 
@@ -68,7 +68,7 @@ With `--json`, every line of output is one JSON object:
 
 | Event | When | Fields |
 |---|---|---|
-| `link` | A link was read and queued | `link`, `tracks`, `new`, `saved`, plus `error` when it could not be read |
+| `link` | A link was read and queued | `link`, `tracks`, `new`, `saved`, plus `unavailable` when songs were left alone and `error` when it could not be read |
 | `track` | A song finished | `status` (`saved`, `exists` or `failed`), `source`, `title`, `artist`, `file`, plus `reason`, `detail` and `permanent` on a failure |
 | `handoff` | The links went to a soundcli that was already running | `owner` (`tui` for the dashboard, `headless` for another `add`) |
 | `done` | The run is over | `saved`, `exists`, `failed`, `halted`, `exit` |
