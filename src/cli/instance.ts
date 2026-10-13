@@ -257,9 +257,15 @@ export async function takeRequest(
       continue;
     }
     const request = parseRequest(raw);
-    if (request && !accept(request)) continue;
+    // A yield is for the run holding the library when a dashboard opens. One
+    // nobody read in time (that run had just finished) would otherwise stop
+    // the next, unrelated run.
+    const stale =
+      request?.kind === "yield" &&
+      Date.now() - Number.parseInt(name, 10) > STALE_MS;
+    if (request && !stale && !accept(request)) continue;
     await fs.rm(file, { force: true });
-    if (request) return request;
+    if (request && !stale) return request;
   }
   return null;
 }

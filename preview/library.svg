@@ -61,7 +61,7 @@
     <text x="464" y="216" textLength="115.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">SoundCloud 3</text>
     <text x="60.8" y="238" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Download</text>
     <rect x="246.6" y="222" width="2.8" height="22" fill="#ff6a3d"/>
-    <text x="272" y="238" textLength="307.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">❯ Press / to search your library</text>
+    <text x="272" y="238" textLength="192" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">❯ Press / to search…</text>
     <rect x="246.6" y="244" width="2.8" height="22" fill="#ff6a3d"/>
     <text x="60.8" y="282" textLength="76.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Settings</text>
     <rect x="246.6" y="266" width="2.8" height="22" fill="#ff6a3d"/>

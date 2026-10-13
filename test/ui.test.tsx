@@ -579,11 +579,15 @@ describe("settings format", () => {
     stdin.write(DOWN); // off Cancel, onto New downloads only
     await tick();
     stdin.write("\r");
-    // Select reports the pick from an effect, a render after the keypress.
-    for (let i = 0; i < 10 && saved.length === 0; i++) await tick();
-    await tick();
+    // Select reports the pick from an effect, a render after the keypress, and
+    // the menu repaints a render after that. Wait for the note itself: a fixed
+    // count of ticks lost that race on Node 24.
+    const note = "Saved. New downloads will be opus.";
+    for (let i = 0; i < 50 && !(lastFrame() ?? "").includes(note); i++) {
+      await tick();
+    }
     expect(saved).toEqual(["opus"]);
-    expect(lastFrame() ?? "").toContain("Saved. New downloads will be opus.");
+    expect(lastFrame() ?? "").toContain(note);
   });
 
   it("offers only the conversion when the format is already set", async () => {

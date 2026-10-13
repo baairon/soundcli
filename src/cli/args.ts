@@ -42,16 +42,25 @@ export function parseCliArgs(argv: string[]): CliCommand {
 export const HELP_TEXT = `soundcli, own your music
 
 usage
-  soundcli                  open the dashboard
-  soundcli <link>           download that song on launch
-  soundcli add <link>...    download with no dashboard
-  soundcli --version        print the version
+  sndcli                    open the dashboard
+  sndcli <link>             download that song on launch
+  sndcli add <link>...      download with no dashboard, then exit
+  sndcli --version          print the version
+  sndcli --help             print this
 
 add
+  <link>                    a song, playlist, set, album or SoundCloud likes
   --all                     take every playlist on a profile link
-  --json                    print one JSON object per line
-  exits 0 when done, 75 when stopped early with the queue saved
+  --json                    one JSON object per line: link, track, handoff, done
   hands the links over when soundcli is already open
+
+add exits with
+  0     done, or handed over
+  1     something failed that another try could fix
+  2     the command was wrong
+  75    stopped early with the queue saved: run it again later
+  130   ctrl-c
+  143   killed by another program
 
 tip: quote links that contain & (e.g. "https://...?list=...")
 `;

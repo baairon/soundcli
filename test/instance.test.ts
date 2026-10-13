@@ -186,6 +186,19 @@ describe("inbox", () => {
     expect(await takeRequest(dir)).toBeNull();
     expect(await fs.readdir(inbox)).toEqual(["0000000000000-half.tmp"]);
   });
+
+  it("drops a yield nobody read in time", async () => {
+    // It was for a run that had just finished. Left in the inbox it would stop
+    // the next, unrelated run as if a dashboard were opening.
+    const inbox = path.join(dir, "inbox");
+    await fs.mkdir(inbox, { recursive: true });
+    await fs.writeFile(
+      path.join(inbox, `${Date.now() - 60_000}-1-old.json`),
+      JSON.stringify({ kind: "yield" }),
+    );
+    expect(await takeRequest(dir)).toBeNull();
+    expect(await fs.readdir(inbox)).toEqual([]);
+  });
 });
 
 describe("ownerInbox", () => {

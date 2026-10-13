@@ -33,7 +33,7 @@ describe("parseCliArgs", () => {
   });
 
   it("help text mentions the link pass-through", () => {
-    expect(HELP_TEXT).toContain("soundcli <link>");
+    expect(HELP_TEXT).toContain("sndcli <link>");
   });
 });
 
@@ -96,8 +96,13 @@ describe("parseCliArgs add", () => {
   });
 
   it("help text documents add", () => {
-    expect(HELP_TEXT).toContain("soundcli add <link>...");
+    expect(HELP_TEXT).toContain("sndcli add <link>...");
     expect(HELP_TEXT).toContain("--all");
     expect(HELP_TEXT).toContain("--json");
+    // npm installs the command as sndcli, so the usage names no other.
+    expect(HELP_TEXT).not.toMatch(/^ {2}soundcli/m);
+    for (const code of [0, 1, 2, 75, 130, 143]) {
+      expect(HELP_TEXT).toMatch(new RegExp(`^ {2}${code}\\s`, "m"));
+    }
   });
 });

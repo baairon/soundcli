@@ -334,9 +334,14 @@ export function App({ initialAdd }: { initialAdd?: string } = {}) {
       }
       void saveConfig(cfg);
     })()
-      .catch((e: unknown) =>
-        setError(e instanceof Error ? e.message : String(e)),
-      )
+      .catch((e: unknown) => {
+        // A dashboard that could not finish setup cannot take links in, so it
+        // lets go of the library: an `sndcli add` then runs on its own instead
+        // of waiting on this screen. A retry claims again.
+        hold.current?.release();
+        hold.current = null;
+        setError(e instanceof Error ? e.message : String(e));
+      })
       .finally(() => {
         booting.current = false;
       });
