@@ -4,49 +4,49 @@
   <rect x="0.5" y="0.5" width="831" height="561" rx="14" fill="none" stroke="#28282b" stroke-width="1"/>
   <text x="416" y="29" text-anchor="middle" font-family='ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace' font-size="13" fill="#8a8a8a">soundcli</text>
   <g font-family='ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace' font-size="16" fill="#d8d0c6">
-    <text x="41.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffb163" font-weight="600">█</text>
-    <text x="51.2" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffaf62" font-weight="600">▀</text>
-    <text x="60.8" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffac60" font-weight="600">▀</text>
-    <text x="80" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa75e" font-weight="600">█</text>
-    <text x="89.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa55c" font-weight="600">▀</text>
-    <text x="99.2" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa25b" font-weight="600">█</text>
-    <text x="118.4" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9d59" font-weight="600">█</text>
-    <text x="137.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9956" font-weight="600">█</text>
-    <text x="156.8" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9453" font-weight="600">█</text>
-    <text x="166.4" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff9152" font-weight="600">▄</text>
-    <text x="185.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff8c4f" font-weight="600">█</text>
-    <text x="204.8" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff874d" font-weight="600">█</text>
-    <text x="214.4" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff854b" font-weight="600">▀</text>
-    <text x="224" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff824a" font-weight="600">▄</text>
-    <text x="243.2" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7e47" font-weight="600">█</text>
-    <text x="252.8" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7b46" font-weight="600">▀</text>
-    <text x="262.4" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7945" font-weight="600">▀</text>
-    <text x="281.6" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7442" font-weight="600">█</text>
-    <text x="320" y="84" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d" font-weight="600">█</text>
-    <text x="41.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0501f" font-weight="600">▄</text>
-    <text x="51.2" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#de4f1e" font-weight="600">▄</text>
-    <text x="60.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#db4e1d" font-weight="600">█</text>
-    <text x="80" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#d74c1c" font-weight="600">█</text>
-    <text x="89.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#d54c1b" font-weight="600">▄</text>
-    <text x="99.2" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#d24b1a" font-weight="600">█</text>
-    <text x="118.4" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ce4919" font-weight="600">█</text>
-    <text x="128" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#cc4818" font-weight="600">▄</text>
-    <text x="137.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#c94717" font-weight="600">█</text>
-    <text x="156.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#c54515" font-weight="600">█</text>
-    <text x="176" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#c04314" font-weight="600">▀</text>
-    <text x="185.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#be4313" font-weight="600">█</text>
-    <text x="204.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#b94112" font-weight="600">█</text>
-    <text x="214.4" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#b74011" font-weight="600">▄</text>
-    <text x="224" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#b53f10" font-weight="600">▀</text>
-    <text x="243.2" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#b03d0e" font-weight="600">█</text>
-    <text x="252.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ae3c0e" font-weight="600">▄</text>
-    <text x="262.4" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ac3b0d" font-weight="600">▄</text>
-    <text x="281.6" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a73a0b" font-weight="600">█</text>
-    <text x="291.2" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a5390a" font-weight="600">▄</text>
-    <text x="300.8" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3380a" font-weight="600">▄</text>
-    <text x="320" y="106" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#9e3608" font-weight="600">█</text>
+    <rect x="41.6" y="68" width="9.6" height="22" fill="#ffb163" shape-rendering="crispEdges"/>
+    <rect x="51.2" y="68" width="9.6" height="11" fill="#ffaf62" shape-rendering="crispEdges"/>
+    <rect x="60.8" y="68" width="9.6" height="11" fill="#ffac60" shape-rendering="crispEdges"/>
+    <rect x="80" y="68" width="9.6" height="22" fill="#ffa75e" shape-rendering="crispEdges"/>
+    <rect x="89.6" y="68" width="9.6" height="11" fill="#ffa55c" shape-rendering="crispEdges"/>
+    <rect x="99.2" y="68" width="9.6" height="22" fill="#ffa25b" shape-rendering="crispEdges"/>
+    <rect x="118.4" y="68" width="9.6" height="22" fill="#ff9d59" shape-rendering="crispEdges"/>
+    <rect x="137.6" y="68" width="9.6" height="22" fill="#ff9956" shape-rendering="crispEdges"/>
+    <rect x="156.8" y="68" width="9.6" height="22" fill="#ff9453" shape-rendering="crispEdges"/>
+    <rect x="166.4" y="79" width="9.6" height="11" fill="#ff9152" shape-rendering="crispEdges"/>
+    <rect x="185.6" y="68" width="9.6" height="22" fill="#ff8c4f" shape-rendering="crispEdges"/>
+    <rect x="204.8" y="68" width="9.6" height="22" fill="#ff874d" shape-rendering="crispEdges"/>
+    <rect x="214.4" y="68" width="9.6" height="11" fill="#ff854b" shape-rendering="crispEdges"/>
+    <rect x="224" y="79" width="9.6" height="11" fill="#ff824a" shape-rendering="crispEdges"/>
+    <rect x="243.2" y="68" width="9.6" height="22" fill="#ff7e47" shape-rendering="crispEdges"/>
+    <rect x="252.8" y="68" width="9.6" height="11" fill="#ff7b46" shape-rendering="crispEdges"/>
+    <rect x="262.4" y="68" width="9.6" height="11" fill="#ff7945" shape-rendering="crispEdges"/>
+    <rect x="281.6" y="68" width="9.6" height="22" fill="#ff7442" shape-rendering="crispEdges"/>
+    <rect x="320" y="68" width="9.6" height="22" fill="#ff6a3d" shape-rendering="crispEdges"/>
+    <rect x="41.6" y="101" width="9.6" height="11" fill="#e0501f" shape-rendering="crispEdges"/>
+    <rect x="51.2" y="101" width="9.6" height="11" fill="#de4f1e" shape-rendering="crispEdges"/>
+    <rect x="60.8" y="90" width="9.6" height="22" fill="#db4e1d" shape-rendering="crispEdges"/>
+    <rect x="80" y="90" width="9.6" height="22" fill="#d74c1c" shape-rendering="crispEdges"/>
+    <rect x="89.6" y="101" width="9.6" height="11" fill="#d54c1b" shape-rendering="crispEdges"/>
+    <rect x="99.2" y="90" width="9.6" height="22" fill="#d24b1a" shape-rendering="crispEdges"/>
+    <rect x="118.4" y="90" width="9.6" height="22" fill="#ce4919" shape-rendering="crispEdges"/>
+    <rect x="128" y="101" width="9.6" height="11" fill="#cc4818" shape-rendering="crispEdges"/>
+    <rect x="137.6" y="90" width="9.6" height="22" fill="#c94717" shape-rendering="crispEdges"/>
+    <rect x="156.8" y="90" width="9.6" height="22" fill="#c54515" shape-rendering="crispEdges"/>
+    <rect x="176" y="90" width="9.6" height="11" fill="#c04314" shape-rendering="crispEdges"/>
+    <rect x="185.6" y="90" width="9.6" height="22" fill="#be4313" shape-rendering="crispEdges"/>
+    <rect x="204.8" y="90" width="9.6" height="22" fill="#b94112" shape-rendering="crispEdges"/>
+    <rect x="214.4" y="101" width="9.6" height="11" fill="#b74011" shape-rendering="crispEdges"/>
+    <rect x="224" y="90" width="9.6" height="11" fill="#b53f10" shape-rendering="crispEdges"/>
+    <rect x="243.2" y="90" width="9.6" height="22" fill="#b03d0e" shape-rendering="crispEdges"/>
+    <rect x="252.8" y="101" width="9.6" height="11" fill="#ae3c0e" shape-rendering="crispEdges"/>
+    <rect x="262.4" y="101" width="9.6" height="11" fill="#ac3b0d" shape-rendering="crispEdges"/>
+    <rect x="281.6" y="90" width="9.6" height="22" fill="#a73a0b" shape-rendering="crispEdges"/>
+    <rect x="291.2" y="101" width="9.6" height="11" fill="#a5390a" shape-rendering="crispEdges"/>
+    <rect x="300.8" y="101" width="9.6" height="11" fill="#a3380a" shape-rendering="crispEdges"/>
+    <rect x="320" y="90" width="9.6" height="22" fill="#9e3608" shape-rendering="crispEdges"/>
     <text x="41.6" y="128" textLength="748.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#6b635d">──────────────────────────────────────────────────────────────────────────────</text>
-    <text x="41.6" y="172" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffb163">▌</text>
+    <rect x="41.6" y="156" width="4.8" height="22" fill="#ffb163" shape-rendering="crispEdges"/>
     <text x="60.8" y="172" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d">Library</text>
     <rect x="246.6" y="156" width="2.8" height="22" fill="#ff6a3d"/>
     <text x="272" y="172" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d" font-weight="600">Library</text>
@@ -100,11 +100,11 @@
     <text x="41.6" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#f0c560">⏸</text>
     <text x="60.8" y="502" textLength="182.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ece4da" font-weight="600">A Longer Song Title</text>
     <text x="252.8" y="502" textLength="144" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">· Another Arti…</text>
-    <text x="416" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6a3d">█</text>
-    <text x="425.6" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff6f40">█</text>
-    <text x="435.2" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7543">█</text>
-    <text x="444.8" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff7a46">█</text>
-    <text x="454.4" y="502" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff8049">█</text>
+    <rect x="416" y="486" width="9.6" height="22" fill="#ff6a3d" shape-rendering="crispEdges"/>
+    <rect x="425.6" y="486" width="9.6" height="22" fill="#ff6f40" shape-rendering="crispEdges"/>
+    <rect x="435.2" y="486" width="9.6" height="22" fill="#ff7543" shape-rendering="crispEdges"/>
+    <rect x="444.8" y="486" width="9.6" height="22" fill="#ff7a46" shape-rendering="crispEdges"/>
+    <rect x="454.4" y="486" width="9.6" height="22" fill="#ff8049" shape-rendering="crispEdges"/>
     <text x="464" y="502" textLength="326.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">░░░░░░░░░  1:36 / 4:11  · 80%  ⇄ ↻</text>
     <text x="41.6" y="524" textLength="9.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#e0b380">↵</text>
     <text x="60.8" y="524" textLength="38.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill-opacity="0.55">Play</text>

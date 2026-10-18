@@ -1,6 +1,6 @@
 // Turn an ANSI-colored terminal frame (what ink renders) into a single
 // self-contained SVG that looks like a tidy terminal window. Pure string
-// work: no DOM, no external resources, safe for GitHub's README sanitizer.
+// work: no DOM, no external resources, safe for README sanitizers.
 //
 // Layout strategy: every styled run becomes its own <text> pinned to the
 // character grid with textLength + lengthAdjust, so the picture stays
@@ -224,6 +224,33 @@ export function ansiToSvg(frame: string, opts: AnsiToSvgOptions): string {
           const cx = PAD + (col + k) * CHAR_W + (CHAR_W - barW) / 2;
           out.push(
             `    <rect x="${fmt(cx)}" y="${fmt(baseline - FONT_SIZE)}" width="${fmt(barW)}" height="${LINE_H}" fill="${fg}"${st.dim ? ` fill-opacity="${DIM_OPACITY}"` : ""}/>`,
+          );
+        }
+        continue;
+      }
+      // Block elements have the same problem: a glyph takes the viewer
+      // font's height, not the line cell's, so the half-block wordmark
+      // splits into stripes and fills shift from font to font. Draw each
+      // cell as an exact rect, whole or just the half the glyph covers,
+      // with crisp edges: cells sit on a fractional 9.6px pitch, and
+      // antialiased neighbors leave a hairline seam where they meet.
+      if (/^[█▀▄▌▐]+$/.test(text)) {
+        const top = baseline - FONT_SIZE;
+        const half = LINE_H / 2;
+        const glyphs = Array.from(text);
+        for (let k = 0; k < n; k++) {
+          const ch = glyphs[k]!;
+          const left = PAD + (col + k) * CHAR_W;
+          let rx = left;
+          let ry = top;
+          let rw = CHAR_W;
+          let rh = LINE_H;
+          if (ch === "▀") rh = half;
+          else if (ch === "▄") { ry = top + half; rh = half; }
+          else if (ch === "▌") rw = CHAR_W / 2;
+          else if (ch === "▐") { rx = left + CHAR_W / 2; rw = CHAR_W / 2; }
+          out.push(
+            `    <rect x="${fmt(rx)}" y="${fmt(ry)}" width="${fmt(rw)}" height="${fmt(rh)}" fill="${fg}"${st.dim ? ` fill-opacity="${DIM_OPACITY}"` : ""} shape-rendering="crispEdges"/>`,
           );
         }
         continue;

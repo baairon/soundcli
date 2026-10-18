@@ -4,45 +4,40 @@ on:
   push:
     branches: [main]
   pull_request:
-
-permissions:
-  contents: read
+  # Lets the release tip be checked by hand before an npm publish.
+  workflow_dispatch:
 
 # On a pull request a new push supersedes the run in flight: only the branch's
 # latest commit needs a verdict. A push to main is never cancelled and never
 # waits behind another one: each is a group of its own, so commits pushed one
 # after another all keep a result of their own.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ forgejo.event_name == 'pull_request' && forgejo.ref || forgejo.sha }}
+  cancel-in-progress: ${{ forgejo.event_name == 'pull_request' }}
 
 jobs:
   test:
-    name: node ${{ matrix.node }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Node ${{ matrix.node }} on Linux
+    runs-on: docker
+    container:
+      image: "docker.io/library/node:${{ matrix.node }}-bookworm"
     strategy:
-      # One platform failing should never hide the result on the others.
+      # One Node version failing should never hide the result on the other.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [22, 24]
 
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
+      - uses: https://data.forgejo.org/actions/checkout@v6
 
       - run: npm ci
 
       - run: npm run typecheck
 
       # The suite never spawns mpv, yt-dlp or ffmpeg and never leaves
-      # os.tmpdir(), so a bare runner is all it needs. The platform-gated
-      # cases in display-path, move-library and recover-path are the whole
-      # reason the matrix spans three operating systems.
+      # os.tmpdir(), so the stock Node image is all it needs. The Windows and
+      # macOS cases in display-path, move-library and recover-path skip on
+      # this Linux runner; run npm test on those platforms to cover them.
       - run: npm test
 
       # Builds what `npm publish` would build, so a broken publish path is

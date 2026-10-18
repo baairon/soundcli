@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="preview/welcome.svg" alt="A terminal dashboard for downloading and playing your music" style="max-width: 832px; width: 100%; height: auto;">
+  <img src="https://git.bairon.dev/baairon/soundcli/raw/branch/main/preview/welcome.svg?v=1.6.1" alt="A terminal dashboard for downloading and playing your music" style="max-width: 832px; width: 100%; height: auto;">
 </p>
 
 Own your music. soundcli downloads your YouTube, SoundCloud, and Spotify libraries to your computer and plays them offline, straight from your terminal. Every song lands on your own drive as a real file, yours to keep and ready the moment you want it.
@@ -25,7 +25,7 @@ The first time it opens, soundcli shows you where your music will be saved: a de
 Then it asks where your music comes from. Pick **YouTube**, **SoundCloud**, or **Spotify**, then type your username or paste a link to a playlist, an album, or a single track. Downloading starts right away, and you can begin listening while the rest of your library finishes.
 
 <p align="center">
-  <img src="preview/library.svg" alt="The library view: sidebar, your songs, and the player mid-song" style="max-width: 832px; width: 100%; height: auto;">
+  <img src="https://git.bairon.dev/baairon/soundcli/raw/branch/main/preview/library.svg?v=1.6.1" alt="The library view: sidebar, your songs, and the player mid-song" style="max-width: 832px; width: 100%; height: auto;">
 </p>
 
 ## Your library, kept in order
@@ -39,7 +39,7 @@ It never downloads the same song twice, and if you close it mid-download, it pic
 Everything runs from the keyboard, with controls that are quick to pick up. Press `?` anytime for the full list of keys. The bar along the bottom of the screen only shows the few that matter right now, so there's nothing to memorize.
 
 <p align="center">
-  <img src="preview/keys.svg" alt="The keyboard cheatsheet: navigate, player, and download keys" style="max-width: 832px; width: 100%; height: auto;">
+  <img src="https://git.bairon.dev/baairon/soundcli/raw/branch/main/preview/keys.svg" alt="The keyboard cheatsheet: navigate, player, and download keys" style="max-width: 832px; width: 100%; height: auto;">
 </p>
 
 ## Without the dashboard
@@ -102,7 +102,7 @@ terminal UI, riding on yt-dlp and mpv.
 
 Run it locally:
 
-1. Clone the repo and open the folder.
+1. Clone the [repo](https://git.bairon.dev/baairon/soundcli) and open the folder.
 2. Install dependencies (Node 22 or newer):
    ```sh
    npm install

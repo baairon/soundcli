@@ -1,6 +1,6 @@
 {
   "name": "sndcli",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Own your music. Download your YouTube, SoundCloud, and Spotify libraries to your computer and play them offline, all from your terminal.",
   "type": "module",
   "bin": {
@@ -39,11 +39,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/baairon/soundcli.git"
+    "url": "git+https://git.bairon.dev/baairon/soundcli.git"
   },
-  "homepage": "https://github.com/baairon/soundcli#readme",
+  "homepage": "https://git.bairon.dev/baairon/soundcli#readme",
   "bugs": {
-    "url": "https://github.com/baairon/soundcli/issues"
+    "url": "https://git.bairon.dev/baairon/soundcli/issues"
   },
   "publishConfig": {
     "access": "public"
