@@ -102,7 +102,7 @@ terminal UI, riding on yt-dlp and mpv.
 
 Run it locally:
 
-1. Clone the [repo](https://git.bairon.dev/baairon/soundcli) and open the folder.
+1. Clone the repo and open the folder.
 2. Install dependencies (Node 22 or newer):
    ```sh
    npm install

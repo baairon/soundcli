@@ -39,11 +39,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://git.bairon.dev/baairon/soundcli.git"
+    "url": "git+https://github.com/baairon/soundcli.git"
   },
-  "homepage": "https://git.bairon.dev/baairon/soundcli#readme",
+  "homepage": "https://github.com/baairon/soundcli#readme",
   "bugs": {
-    "url": "https://git.bairon.dev/baairon/soundcli/issues"
+    "url": "https://github.com/baairon/soundcli/issues"
   },
   "publishConfig": {
     "access": "public"
