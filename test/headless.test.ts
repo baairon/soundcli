@@ -71,6 +71,7 @@ function deps(over: Partial<HeadlessDeps> = {}): HeadlessDeps {
       return { queue, library };
     },
     list: (target) => listTarget(target),
+    search: async () => undefined,
     signals: (onSignal) => {
       signal = onSignal;
       return () => {};
@@ -117,6 +118,45 @@ afterEach(async () => {
   vi.mocked(downloadTrack).mockImplementation(() => new Promise(() => {}));
   enumerateMock.mockReset();
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+describe("runAdd with search words", () => {
+  it("adds the top result for words that are not a link", async () => {
+    linksResolve();
+    const search = vi.fn(async (q: string) => `https://youtu.be/${q.replace(/ /g, "-")}`);
+    downloadsSucceed();
+    const code = await runAdd(
+      { links: ["velvet signal"], all: false, json: true },
+      deps({ search }),
+    );
+    expect(code).toBe(EXIT.ok);
+    expect(search).toHaveBeenCalledWith("velvet signal", expect.any(Function));
+    expect(events().find((e) => e.event === "link")).toMatchObject({
+      link: "https://youtu.be/velvet-signal",
+    });
+  });
+
+  it("fails before downloading anything when a search finds nothing", async () => {
+    const code = await runAdd(
+      { links: ["zzzz yyyy"], all: false, json: true },
+      deps(),
+    );
+    expect(code).toBe(EXIT.failed);
+    expect(notes.join("\n")).toContain("zzzz yyyy: no YouTube result.");
+    expect(vi.mocked(downloadTrack)).not.toHaveBeenCalled();
+  });
+});
+
+describe("runAdd with a bare word", () => {
+  it("is still not a link, and never searches", async () => {
+    const search = vi.fn();
+    const code = await runAdd(
+      { links: ["radiohead"], all: false, json: true },
+      deps({ search }),
+    );
+    expect(code).toBe(EXIT.usage);
+    expect(search).not.toHaveBeenCalled();
+  });
 });
 
 describe("runAdd", () => {
