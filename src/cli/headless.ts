@@ -4,8 +4,10 @@
 // decisions are who owns the library right now and what to tell the caller.
 
 import { ensureFfmpeg } from "../bin/ffmpeg-fetch";
+import { isLinkInput } from "../sources/detect";
 import { ensureYtDlp, finalizeStagedYtDlp } from "../bin/ytdlp-fetch";
 import { maybeUpdateYtDlp } from "../bin/ytdlp-update";
+import { searchYouTube } from "../ytdlp/search";
 import { loadConfig } from "../config/config";
 import { paths } from "../config/paths";
 import { enqueueAsked, listTarget } from "../download/gather";
@@ -143,6 +145,11 @@ export interface HeadlessDeps {
     target: OkTarget,
     note: (message: string) => void,
   ) => Promise<SourceTrack[]>;
+  /** The URL of the top YouTube result for a search, if there is one. */
+  search: (
+    query: string,
+    note: (message: string) => void,
+  ) => Promise<string | undefined>;
   /** Hear the signals that stop a run; returns how to stop listening. */
   signals: (onSignal: (signal: StopSignal) => void) => () => void;
 }
@@ -182,6 +189,10 @@ function defaultDeps(): HeadlessDeps {
     list: async (target, note) => {
       await ensureYtDlp(note);
       return listTarget(target);
+    },
+    search: async (query, note) => {
+      await ensureYtDlp(note);
+      return (await searchYouTube(query, 1))[0]?.url;
     },
     signals: (onSignal) => {
       const signals = Object.keys(SIGNAL_STOPS) as StopSignal[];
@@ -276,8 +287,24 @@ export async function runAdd(
 ): Promise<number> {
   // Every link is checked before anything is claimed or fetched, so a typo
   // fails in milliseconds and changes nothing.
+  const links: string[] = [];
+  for (const arg of cmd.links) {
+    // Words with a space in them can't be a handle, so they are a search; a
+    // single bare word stays an error because it could be a handle on any site.
+    if (isLinkInput(arg) || !/\s/.test(arg.trim())) {
+      links.push(arg);
+      continue;
+    }
+    const url = await deps.search(arg, deps.note);
+    if (!url) {
+      deps.note(`${arg}: no YouTube result.`);
+      return EXIT.failed;
+    }
+    deps.note(`${arg}: ${url}`);
+    links.push(url);
+  }
   const jobs: Job[] = [];
-  for (const link of cmd.links) {
+  for (const link of links) {
     const target = resolveLink(link, { all: cmd.all });
     if (!target.ok) {
       deps.note(`${link}: ${target.reason}`);
@@ -287,7 +314,7 @@ export async function runAdd(
   }
   return run(
     jobs,
-    { kind: "add", links: cmd.links, all: cmd.all, into: cmd.into },
+    { kind: "add", links, all: cmd.all, into: cmd.into },
     cmd.json,
     deps,
   );
